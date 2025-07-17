@@ -14,11 +14,27 @@ const stockList = ref(['牛乳', '卵', '玉ねぎ', 'にんじん', 'じゃが�
 const customStock = ref('')
 const isAnalyzing = ref(false)
 
+// 精度向上オプション
+const analysisOptions = ref({
+  stockOnlyMode: false, // 常備食材のみ検出
+  minConfidence: 70,    // 最小信頼度(%)
+  requireRetake: true   // 低信頼度時の再撮影要求
+})
+
 // 解析結果
 const basicResult = ref(null)
 const detailedResult = ref(null)
 const lightweightResult = ref(null)
 const analysisTime = ref({})
+const filteredResults = ref({}) // フィルタ後の結果
+
+// 画像品質チェック
+const imageQuality = ref({
+  brightness: 'good', // 'good', 'fair', 'poor'
+  brightnessText: '良好',
+  size: 'good', // 'good', 'fair', 'poor'
+  sizeText: '良好'
+})
 
 // ファイル選択
 const handleFileChange = (event) => {
@@ -30,8 +46,61 @@ const handleFileChange = (event) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       imagePreview.value = e.target.result
+      checkImageQuality(e.target.result)
     }
     reader.readAsDataURL(file)
+  }
+}
+
+// 画像品質チェック
+const checkImageQuality = (imageUrl) => {
+  const img = new Image()
+  img.src = imageUrl
+
+  img.onload = () => {
+    const width = img.width
+    const height = img.height
+
+    if (width < 1000 || height < 1000) {
+      imageQuality.value.size = 'poor'
+      imageQuality.value.sizeText = '低解像度'
+    } else {
+      imageQuality.value.size = 'good'
+      imageQuality.value.sizeText = '良好'
+    }
+
+    // 明るさの判定はより複雑なアルゴリズムが必要になります。
+    // ここでは簡易的に、画像の平均輝度を計算してみます。
+    // 実際のアプリケーションでは、OpenCVやTensorFlowなどを使用することを推奨します。
+    // ここでは、画像の平均輝度を計算してみます。
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(img, 0, 0, width, height)
+
+    const imageData = ctx.getImageData(0, 0, width, height)
+    const data = imageData.data
+    let totalBrightness = 0
+    for (let i = 0; i < data.length; i += 4) {
+      totalBrightness += (data[i] + data[i + 1] + data[i + 2]) / 3
+    }
+    const averageBrightness = totalBrightness / (width * height)
+
+    if (averageBrightness < 100) { // 例: 平均輝度が低い場合
+      imageQuality.value.brightness = 'poor'
+      imageQuality.value.brightnessText = '暗い'
+    } else {
+      imageQuality.value.brightness = 'good'
+      imageQuality.value.brightnessText = '良好'
+    }
+  }
+
+  img.onerror = () => {
+    imageQuality.value.brightness = 'poor'
+    imageQuality.value.brightnessText = 'エラー'
+    imageQuality.value.size = 'poor'
+    imageQuality.value.sizeText = 'エラー'
   }
 }
 
@@ -45,6 +114,193 @@ const addStock = () => {
 
 const removeStock = (index) => {
   stockList.value.splice(index, 1)
+}
+
+// 信頼度フィルタリング
+const filterByConfidence = (result, minConfidence) => {
+  if (!result || !result.success) return result
+  
+  try {
+    const parsed = parseResult(result)
+    if (!parsed) return result
+    
+    let filteredItems = []
+    let lowConfidenceCount = 0
+    
+    if (parsed.detected_items && Array.isArray(parsed.detected_items)) {
+      parsed.detected_items.forEach(item => {
+        const confidence = parseInt(item.confidence) || 0
+        if (confidence >= minConfidence) {
+          filteredItems.push(item)
+        } else {
+          lowConfidenceCount++
+        }
+      })
+    }
+    
+    return {
+      ...result,
+      filtered: true,
+      filteredData: {
+        ...parsed,
+        detected_items: filteredItems,
+        filtering_summary: {
+          total_detected: (parsed.detected_items || []).length,
+          high_confidence: filteredItems.length,
+          low_confidence: lowConfidenceCount,
+          min_confidence_threshold: minConfidence
+        }
+      }
+    }
+  } catch (error) {
+    console.error('フィルタリングエラー:', error)
+    return result
+  }
+}
+
+// 常備食材限定フィルタリング
+const filterByStockList = (result, stockList) => {
+  if (!result || !result.success || !stockList.length) return result
+  
+  try {
+    const parsed = result.filtered ? result.filteredData : parseResult(result)
+    if (!parsed) return result
+    
+    const stockItemsLower = stockList.map(item => item.toLowerCase())
+    let matchedItems = []
+    let unmatchedItems = []
+    
+    if (parsed.detected_items && Array.isArray(parsed.detected_items)) {
+      parsed.detected_items.forEach(item => {
+        const itemNameLower = item.name.toLowerCase()
+        const isMatch = stockItemsLower.some(stock => 
+          itemNameLower.includes(stock) || stock.includes(itemNameLower)
+        )
+        
+        if (isMatch) {
+          matchedItems.push(item)
+        } else {
+          unmatchedItems.push(item)
+        }
+      })
+    }
+    
+    return {
+      ...result,
+      stockFiltered: true,
+      stockFilteredData: {
+        ...parsed,
+        detected_items: matchedItems,
+        stock_filtering_summary: {
+          target_stock_items: stockList.length,
+          matched_items: matchedItems.length,
+          unmatched_items: unmatchedItems.length,
+          unmatched_list: unmatchedItems.map(item => item.name)
+        }
+      }
+    }
+  } catch (error) {
+    console.error('常備食材フィルタリングエラー:', error)
+    return result
+  }
+}
+
+// 結果の後処理
+const processResults = () => {
+  let needRetakeAlert = false
+  const alertMessages = []
+
+  if (basicResult.value) {
+    let processed = basicResult.value
+    if (analysisOptions.value.minConfidence > 0) {
+      processed = filterByConfidence(processed, analysisOptions.value.minConfidence)
+      if (processed.filteredData && processed.filteredData.filtering_summary.low_confidence > 0) {
+        needRetakeAlert = true
+        alertMessages.push(`基本版: ${processed.filteredData.filtering_summary.low_confidence}件の低信頼度項目`)
+      }
+    }
+    if (analysisOptions.value.stockOnlyMode) {
+      processed = filterByStockList(processed, stockList.value)
+    }
+    filteredResults.value.basic = processed
+  }
+  
+  if (detailedResult.value) {
+    let processed = detailedResult.value
+    if (analysisOptions.value.minConfidence > 0) {
+      processed = filterByConfidence(processed, analysisOptions.value.minConfidence)
+      if (processed.filteredData && processed.filteredData.filtering_summary.low_confidence > 0) {
+        needRetakeAlert = true
+        alertMessages.push(`詳細版: ${processed.filteredData.filtering_summary.low_confidence}件の低信頼度項目`)
+      }
+    }
+    if (analysisOptions.value.stockOnlyMode) {
+      processed = filterByStockList(processed, stockList.value)
+    }
+    filteredResults.value.detailed = processed
+  }
+  
+  if (lightweightResult.value) {
+    let processed = lightweightResult.value
+    // 軽量版は簡単な構造なので、シンプルなフィルタリング
+    if (analysisOptions.value.stockOnlyMode && lightweightResult.value.success) {
+      try {
+        const parsed = parseResult(lightweightResult.value)
+        if (parsed && parsed.items) {
+          const stockItemsLower = stockList.value.map(item => item.toLowerCase())
+          const filteredItems = parsed.items.filter(item => 
+            stockItemsLower.some(stock => 
+              item.toLowerCase().includes(stock) || stock.includes(item.toLowerCase())
+            )
+          )
+          processed = {
+            ...lightweightResult.value,
+            stockFiltered: true,
+            stockFilteredData: {
+              ...parsed,
+              items: filteredItems,
+              original_count: parsed.items.length,
+              filtered_count: filteredItems.length
+            }
+          }
+        }
+      } catch (error) {
+        console.error('軽量版フィルタリングエラー:', error)
+      }
+    }
+    filteredResults.value.lightweight = processed
+  }
+
+  // 再撮影アラート
+  if (needRetakeAlert && analysisOptions.value.requireRetake) {
+    showRetakeAlert(alertMessages)
+  }
+}
+
+// 再撮影アラート表示
+const showRetakeAlert = (messages) => {
+  const alertText = `
+📸 画像の撮り直しをお勧めします
+
+検出された問題:
+${messages.map(msg => `• ${msg}`).join('\n')}
+
+より良い結果を得るために:
+• 十分な明るさで撮影してください
+• カメラのピントを食材に合わせてください  
+• 食材が重ならないよう配置してください
+• 高解像度で撮影してください
+
+撮り直しますか？
+  `
+  
+  if (confirm(alertText)) {
+    // ファイル入力をクリックして再撮影を促す
+    const fileInput = document.querySelector('.file-input')
+    if (fileInput) {
+      fileInput.click()
+    }
+  }
 }
 
 // 全モデルで解析実行
@@ -73,6 +329,9 @@ const analyzeAllModels = async () => {
     const startLightweight = Date.now()
     lightweightResult.value = await analyzeFridgeLightweight(imageBase64)
     analysisTime.value.lightweight = Date.now() - startLightweight
+    
+    // 結果の後処理
+    processResults()
 
   } catch (error) {
     console.error('解析エラー:', error)
@@ -109,6 +368,10 @@ const analyzeSingle = async (modelType) => {
         analysisTime.value.lightweight = Date.now() - start
         break
     }
+    
+    // 結果の後処理
+    processResults()
+    
   } catch (error) {
     console.error('解析エラー:', error)
     alert('解析中にエラーが発生しました: ' + error.message)
@@ -138,12 +401,29 @@ const parseResult = (result) => {
   }
 }
 
+// 表示用データの取得
+const getDisplayData = (resultKey) => {
+  const filtered = filteredResults.value[resultKey]
+  if (filtered && (filtered.stockFiltered || filtered.filtered)) {
+    return filtered.stockFilteredData || filtered.filteredData || parseResult(filtered)
+  }
+  
+  const original = {
+    basic: basicResult.value,
+    detailed: detailedResult.value,
+    lightweight: lightweightResult.value
+  }[resultKey]
+  
+  return parseResult(original)
+}
+
 // 結果のクリア
 const clearResults = () => {
   basicResult.value = null
   detailedResult.value = null
   lightweightResult.value = null
   analysisTime.value = {}
+  filteredResults.value = {}
 }
 </script>
 
@@ -163,7 +443,43 @@ const clearResults = () => {
 
     <!-- 画像アップロード -->
     <section class="upload-section">
-      <h3>📸 冷蔵庫画像をアップロード</h3>
+      <h3>�� 冷蔵庫画像をアップロード</h3>
+      
+      <!-- 撮影ガイダンス -->
+      <div class="photo-guidance">
+        <h4>📋 高精度解析のための撮影ガイド</h4>
+        <div class="guidance-grid">
+          <div class="guidance-item">
+            <span class="guidance-icon">💡</span>
+            <div>
+              <strong>明るさ</strong><br>
+              十分な照明で、食材が鮮明に見える環境で撮影
+            </div>
+          </div>
+          <div class="guidance-item">
+            <span class="guidance-icon">📐</span>
+            <div>
+              <strong>角度</strong><br>
+              冷蔵庫の正面から、食材が重ならないように撮影
+            </div>
+          </div>
+          <div class="guidance-item">
+            <span class="guidance-icon">🎯</span>
+            <div>
+              <strong>焦点</strong><br>
+              ピントを合わせ、ブレのない鮮明な画像
+            </div>
+          </div>
+          <div class="guidance-item">
+            <span class="guidance-icon">📦</span>
+            <div>
+              <strong>整理</strong><br>
+              可能であれば食材を見やすく配置
+            </div>
+          </div>
+        </div>
+      </div>
+      
       <input 
         type="file" 
         accept="image/*" 
@@ -173,6 +489,19 @@ const clearResults = () => {
       
       <div v-if="imagePreview" class="image-preview">
         <img :src="imagePreview" alt="アップロード画像" />
+        <div class="image-quality-check">
+          <h5>📊 画像品質チェック</h5>
+          <div class="quality-indicators">
+            <div class="quality-item">
+              <span class="indicator" :class="imageQuality.brightness">●</span>
+              明るさ: {{ imageQuality.brightnessText }}
+            </div>
+            <div class="quality-item">
+              <span class="indicator" :class="imageQuality.size">●</span>
+              解像度: {{ imageQuality.sizeText }}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -204,6 +533,54 @@ const clearResults = () => {
     <!-- 解析実行 -->
     <section class="analyze-section">
       <h3>🚀 解析実行</h3>
+      
+      <!-- 精度向上オプション -->
+      <div class="accuracy-options">
+        <h4>⚙️ 精度向上オプション</h4>
+        <div class="options-grid">
+          <div class="option-item">
+            <label class="checkbox-label">
+              <input 
+                type="checkbox" 
+                v-model="analysisOptions.stockOnlyMode"
+                @change="processResults"
+              >
+              <span class="checkmark"></span>
+              常備食材のみ検出
+            </label>
+            <p class="option-desc">登録した常備食材リストの項目のみを表示</p>
+          </div>
+          
+          <div class="option-item">
+            <label class="range-label">
+              最小信頼度: {{ analysisOptions.minConfidence }}%
+              <input 
+                type="range" 
+                min="0" 
+                max="100" 
+                step="5"
+                v-model="analysisOptions.minConfidence"
+                @input="processResults"
+                class="confidence-slider"
+              >
+            </label>
+            <p class="option-desc">この値未満の信頼度の結果を除外</p>
+          </div>
+          
+          <div class="option-item">
+            <label class="checkbox-label">
+              <input 
+                type="checkbox" 
+                v-model="analysisOptions.requireRetake"
+              >
+              <span class="checkmark"></span>
+              低信頼度時の再撮影要求
+            </label>
+            <p class="option-desc">信頼度が低い場合、撮り直しを促す</p>
+          </div>
+        </div>
+      </div>
+      
       <div class="analyze-buttons">
         <button 
           @click="analyzeAllModels" 
@@ -257,7 +634,18 @@ const clearResults = () => {
         </h4>
         
         <div v-if="basicResult.success" class="result-content">
-          <pre>{{ parseResult(basicResult) ? JSON.stringify(parseResult(basicResult), null, 2) : basicResult.result }}</pre>
+          <!-- フィルタリング情報 -->
+          <div v-if="filteredResults.basic && (filteredResults.basic.filtered || filteredResults.basic.stockFiltered)" class="filter-info">
+            <div v-if="filteredResults.basic.filtered" class="filter-summary">
+              🔍 信頼度フィルタ: {{ filteredResults.basic.filteredData.filtering_summary.high_confidence }}件表示 
+              ({{ filteredResults.basic.filteredData.filtering_summary.low_confidence }}件除外)
+            </div>
+            <div v-if="filteredResults.basic.stockFiltered" class="filter-summary">
+              📝 常備食材フィルタ: {{ filteredResults.basic.stockFilteredData.stock_filtering_summary.matched_items }}件一致
+            </div>
+          </div>
+          
+          <pre>{{ getDisplayData('basic') ? JSON.stringify(getDisplayData('basic'), null, 2) : basicResult.result }}</pre>
         </div>
         <div v-else class="error-content">
           <p>❌ エラー: {{ basicResult.error }}</p>
@@ -271,7 +659,18 @@ const clearResults = () => {
         </h4>
         
         <div v-if="detailedResult.success" class="result-content">
-          <pre>{{ parseResult(detailedResult) ? JSON.stringify(parseResult(detailedResult), null, 2) : detailedResult.result }}</pre>
+          <!-- フィルタリング情報 -->
+          <div v-if="filteredResults.detailed && (filteredResults.detailed.filtered || filteredResults.detailed.stockFiltered)" class="filter-info">
+            <div v-if="filteredResults.detailed.filtered" class="filter-summary">
+              🔍 信頼度フィルタ: {{ filteredResults.detailed.filteredData.filtering_summary.high_confidence }}件表示 
+              ({{ filteredResults.detailed.filteredData.filtering_summary.low_confidence }}件除外)
+            </div>
+            <div v-if="filteredResults.detailed.stockFiltered" class="filter-summary">
+              📝 常備食材フィルタ: {{ filteredResults.detailed.stockFilteredData.stock_filtering_summary.matched_items }}件一致
+            </div>
+          </div>
+          
+          <pre>{{ getDisplayData('detailed') ? JSON.stringify(getDisplayData('detailed'), null, 2) : detailedResult.result }}</pre>
         </div>
         <div v-else class="error-content">
           <p>❌ エラー: {{ detailedResult.error }}</p>
@@ -285,7 +684,15 @@ const clearResults = () => {
         </h4>
         
         <div v-if="lightweightResult.success" class="result-content">
-          <pre>{{ parseResult(lightweightResult) ? JSON.stringify(parseResult(lightweightResult), null, 2) : lightweightResult.result }}</pre>
+          <!-- フィルタリング情報 -->
+          <div v-if="filteredResults.lightweight && filteredResults.lightweight.stockFiltered" class="filter-info">
+            <div class="filter-summary">
+              📝 常備食材フィルタ: {{ filteredResults.lightweight.stockFilteredData.filtered_count }}件一致 
+              (元: {{ filteredResults.lightweight.stockFilteredData.original_count }}件)
+            </div>
+          </div>
+          
+          <pre>{{ getDisplayData('lightweight') ? JSON.stringify(getDisplayData('lightweight'), null, 2) : lightweightResult.result }}</pre>
         </div>
         <div v-else class="error-content">
           <p>❌ エラー: {{ lightweightResult.error }}</p>
@@ -352,6 +759,7 @@ const clearResults = () => {
 
 .image-preview {
   margin-top: 1rem;
+  position: relative;
 }
 
 .image-preview img {
@@ -359,6 +767,100 @@ const clearResults = () => {
   max-height: 300px;
   border-radius: 0.5rem;
   border: 1px solid #e2e8f0;
+}
+
+/* 撮影ガイダンス */
+.photo-guidance {
+  background: #f0f9ff;
+  border: 1px solid #0ea5e9;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.photo-guidance h4 {
+  color: #0369a1;
+  margin-bottom: 1rem;
+}
+
+.guidance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.guidance-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: white;
+  border-radius: 0.25rem;
+  border: 1px solid #e0f2fe;
+}
+
+.guidance-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.guidance-item strong {
+  color: #0369a1;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.guidance-item div {
+  font-size: 0.875rem;
+  color: #374151;
+  line-height: 1.4;
+}
+
+.image-quality-check {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.25rem;
+  margin: 0.5rem;
+  font-size: 0.875rem;
+  z-index: 10;
+}
+
+.image-quality-check h5 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  color: #e0e7ff;
+}
+
+.quality-indicators {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.quality-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.indicator {
+  font-size: 1rem;
+}
+
+.indicator.good {
+  color: #22c55e;
+}
+
+.indicator.fair {
+  color: #f59e0b;
+}
+
+.indicator.poor {
+  color: #ef4444;
 }
 
 .stock-input {
@@ -410,6 +912,97 @@ const clearResults = () => {
   gap: 0.5rem;
 }
 
+.accuracy-options {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: #f9fafb;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+}
+
+.accuracy-options h4 {
+  color: #2d3748;
+  margin-bottom: 0.75rem;
+}
+
+.options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+.option-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: #374151;
+}
+
+.checkbox-label input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+.checkmark {
+  height: 1.25rem;
+  width: 1.25rem;
+  background-color: #e2e8f0;
+  border: 1px solid #cbd5e0;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.checkbox-label input:checked ~ .checkmark {
+  background-color: #0ea5e9;
+  border-color: #0ea5e9;
+}
+
+.checkmark:after {
+  content: "";
+  display: none;
+  width: 0.5rem;
+  height: 1rem;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.checkbox-label input:checked ~ .checkmark:after {
+  display: block;
+}
+
+.range-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: #374151;
+}
+
+.confidence-slider {
+  width: 100%;
+  accent-color: #0ea5e9; /* スライダーの色を変更 */
+}
+
+.option-desc {
+  font-size: 0.75rem;
+  color: #6b7280;
+  margin-top: 0.25rem;
+}
+
 .result-card {
   margin-bottom: 1.5rem;
   border: 1px solid #d1d5db;
@@ -450,6 +1043,24 @@ const clearResults = () => {
 .error-content p {
   color: #dc2626;
   margin: 0;
+}
+
+.filter-info {
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  background: #f0f9eb;
+  border: 1px solid #a7f3d0;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  color: #065f46;
+}
+
+.filter-summary {
+  margin-bottom: 0.5rem;
+}
+
+.filter-summary:last-child {
+  margin-bottom: 0;
 }
 
 .btn-danger {
