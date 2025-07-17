@@ -5,7 +5,7 @@ import { supabase, testConnection } from '../supabase.js'
 // リアクティブ変数
 const connectionStatus = ref('')
 const user = ref(null)
-const email = ref('test@example.com')
+const email = ref('user@gmail.com')
 const password = ref('password123')
 const authMessage = ref('')
 const tableData = ref([])
@@ -124,6 +124,16 @@ onMounted(() => {
   <div class="supabase-test">
     <h2>🔧 Supabase接続テスト</h2>
     
+    <div class="test-info">
+      <h3>📝 テスト手順</h3>
+      <ol>
+        <li><strong>接続確認:</strong> 「接続テスト」ボタンでSupabase接続を確認</li>
+        <li><strong>認証テスト:</strong> 有効なメールアドレスでサインアップ → ログイン</li>
+        <li><strong>テーブル操作:</strong> ログイン後、アイテムの追加・取得・削除をテスト</li>
+      </ol>
+      <p class="note"><strong>注意:</strong> 実際のメールアドレスを使用してください（test@example.com等は無効）</p>
+    </div>
+    
     <!-- 接続テスト -->
     <section class="test-section">
       <h3>接続確認</h3>
@@ -137,8 +147,8 @@ onMounted(() => {
     <section class="test-section">
       <h3>認証テスト</h3>
       <div class="auth-form">
-        <input v-model="email" type="email" placeholder="メールアドレス" class="input">
-        <input v-model="password" type="password" placeholder="パスワード" class="input">
+        <input v-model="email" type="email" placeholder="有効なメールアドレス（例: yourname@gmail.com）" class="input">
+        <input v-model="password" type="password" placeholder="パスワード（6文字以上）" class="input">
         <div class="button-group">
           <button @click="signUp" class="btn btn-secondary">サインアップ</button>
           <button @click="signIn" class="btn btn-primary">ログイン</button>
@@ -146,18 +156,19 @@ onMounted(() => {
         </div>
       </div>
       <p class="status">{{ authMessage || '未実行' }}</p>
-      <p v-if="user" class="user-info">ログイン中: {{ user.email }}</p>
+      <p v-if="user" class="user-info">✅ ログイン中: {{ user.email }}</p>
     </section>
 
     <!-- テーブル操作テスト -->
     <section class="test-section">
       <h3>テーブル操作テスト (fridge_items)</h3>
       <div class="table-form">
-        <input v-model="newItemName" placeholder="アイテム名" class="input">
+        <input v-model="newItemName" placeholder="アイテム名（例: りんご）" class="input">
         <button @click="addItem" :disabled="!user" class="btn btn-primary">追加</button>
         <button @click="fetchItems" class="btn btn-secondary">取得</button>
       </div>
       <p class="status">{{ tableMessage || '未実行' }}</p>
+      <p v-if="!user" class="warning">⚠️ テーブル操作にはログインが必要です</p>
       
       <div v-if="tableData.length > 0" class="table-data">
         <h4>取得データ ({{ tableData.length }}件)</h4>
@@ -178,6 +189,38 @@ onMounted(() => {
   max-width: 800px;
   margin: 0 auto;
   padding: 2rem;
+}
+
+.test-info {
+  background: #f0f9ff;
+  border: 1px solid #0ea5e9;
+  border-radius: 0.5rem;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.test-info h3 {
+  color: #0369a1;
+  margin-bottom: 1rem;
+}
+
+.test-info ol {
+  margin-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.test-info ol li {
+  margin-bottom: 0.5rem;
+}
+
+.note {
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: 0.25rem;
+  padding: 0.75rem;
+  color: #92400e;
+  font-size: 0.9rem;
+  margin: 0;
 }
 
 .test-section {
@@ -207,6 +250,7 @@ onMounted(() => {
   border: 1px solid #cbd5e0;
   border-radius: 0.25rem;
   font-size: 1rem;
+  min-width: 200px;
 }
 
 .button-group {
@@ -234,6 +278,11 @@ onMounted(() => {
 
 .user-info {
   color: #3182ce;
+  font-weight: bold;
+}
+
+.warning {
+  color: #d69e2e;
   font-weight: bold;
 }
 
@@ -269,6 +318,10 @@ onMounted(() => {
   .table-form {
     flex-direction: column;
     align-items: stretch;
+  }
+  
+  .input {
+    min-width: auto;
   }
   
   .button-group {
