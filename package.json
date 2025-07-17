@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "description": "冷蔵庫管理アプリ - ローカル開発環境は使用せず、Vercel自動ビルドのみで開発",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
