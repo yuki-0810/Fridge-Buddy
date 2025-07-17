@@ -1,8 +1,14 @@
 <script setup>
 import { ref } from 'vue'
+import SupabaseTest from './SupabaseTest.vue'
 
 const appTitle = ref('Fridge Buddy')
 const subtitle = ref('あなたの冷蔵庫を賢く管理')
+const activeTab = ref('home') // 'home' または 'test'
+
+const switchTab = (tab) => {
+  activeTab.value = tab
+}
 </script>
 
 <template>
@@ -11,19 +17,47 @@ const subtitle = ref('あなたの冷蔵庫を賢く管理')
       <div class="container">
         <h1 class="title">{{ appTitle }}</h1>
         <p class="subtitle">{{ subtitle }}</p>
+        
+        <!-- タブナビゲーション -->
+        <nav class="tab-nav">
+          <button 
+            @click="switchTab('home')" 
+            :class="['tab-btn', { active: activeTab === 'home' }]"
+          >
+            ホーム
+          </button>
+          <button 
+            @click="switchTab('test')" 
+            :class="['tab-btn', { active: activeTab === 'test' }]"
+          >
+            Supabaseテスト
+          </button>
+        </nav>
       </div>
     </header>
     
     <main class="main-content">
       <div class="container">
-        <div class="welcome-section">
-          <h2>冷蔵庫管理を始めましょう</h2>
-          <p>食材の管理、賞味期限の確認、レシピ提案まで、すべてFridge Buddyにお任せください。</p>
-          
-          <div class="action-buttons">
-            <button class="btn btn-primary">食材を追加</button>
-            <button class="btn btn-secondary">レシピを探す</button>
+        <!-- ホームタブ -->
+        <div v-if="activeTab === 'home'" class="tab-content">
+          <div class="welcome-section">
+            <h2>冷蔵庫管理を始めましょう</h2>
+            <p>食材の管理、賞味期限の確認、レシピ提案まで、すべてFridge Buddyにお任せください。</p>
+            
+            <div class="action-buttons">
+              <button class="btn btn-primary">食材を追加</button>
+              <button class="btn btn-secondary">レシピを探す</button>
+            </div>
+            
+            <div class="test-note">
+              <p>💡 <strong>開発中:</strong> 上部の「Supabaseテスト」タブから接続・認証・DB操作をテストできます</p>
+            </div>
           </div>
+        </div>
+        
+        <!-- Supabaseテストタブ -->
+        <div v-if="activeTab === 'test'" class="tab-content">
+          <SupabaseTest />
         </div>
       </div>
     </main>
@@ -52,11 +86,47 @@ const subtitle = ref('あなたの冷蔵庫を賢く管理')
 .subtitle {
   font-size: 1.2rem;
   opacity: 0.9;
+  margin-bottom: 1.5rem;
+}
+
+/* タブナビゲーション */
+.tab-nav {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.tab-btn {
+  padding: 0.5rem 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 1rem;
+}
+
+.tab-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.tab-btn.active {
+  background: white;
+  color: #667eea;
+  border-color: white;
+  font-weight: bold;
 }
 
 .main-content {
   flex: 1;
   padding: 3rem 0;
+}
+
+.tab-content {
+  min-height: 60vh;
 }
 
 .welcome-section {
@@ -83,6 +153,21 @@ const subtitle = ref('あなたの冷蔵庫を賢く管理')
   gap: 1rem;
   justify-content: center;
   flex-wrap: wrap;
+  margin-bottom: 2rem;
+}
+
+.test-note {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-top: 2rem;
+}
+
+.test-note p {
+  color: #9a3412;
+  font-size: 0.9rem;
+  margin: 0;
 }
 
 /* レスポンシブ対応 */
@@ -93,6 +178,15 @@ const subtitle = ref('あなたの冷蔵庫を賢く管理')
   
   .subtitle {
     font-size: 1rem;
+  }
+  
+  .tab-nav {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .tab-btn {
+    width: 200px;
   }
   
   .welcome-section h2 {
@@ -124,6 +218,11 @@ const subtitle = ref('あなたの冷蔵庫を賢く管理')
   
   .title {
     font-size: 1.8rem;
+  }
+  
+  .tab-btn {
+    width: 150px;
+    font-size: 0.9rem;
   }
 }
 </style> 
