@@ -155,8 +155,8 @@ const clearResults = () => {
       <h3>📊 モデル比較テスト</h3>
       <p>3つの異なるアプローチで冷蔵庫画像を解析し、精度とレスポンス時間を比較します：</p>
       <ul>
-        <li><strong>基本版:</strong> GPT-4 Vision（基本的な食材検出）</li>
-        <li><strong>詳細版:</strong> GPT-4 Vision（常備食材リスト対応・詳細分析）</li>
+        <li><strong>基本版:</strong> GPT-4o（基本的な食材検出）</li>
+        <li><strong>詳細版:</strong> GPT-4o（常備食材リスト対応・詳細分析）</li>
         <li><strong>軽量版:</strong> GPT-4o（高速・簡潔）</li>
       </ul>
     </div>
@@ -252,7 +252,7 @@ const clearResults = () => {
       
       <!-- 基本版結果 -->
       <div v-if="basicResult" class="result-card">
-        <h4>基本版 (GPT-4 Vision) 
+        <h4>基本版 (GPT-4o) 
           <span v-if="analysisTime.basic" class="time">⏱️ {{ analysisTime.basic }}ms</span>
         </h4>
         
@@ -266,7 +266,7 @@ const clearResults = () => {
 
       <!-- 詳細版結果 -->
       <div v-if="detailedResult" class="result-card">
-        <h4>詳細版 (GPT-4 Vision + 常備リスト) 
+        <h4>詳細版 (GPT-4o + 常備リスト) 
           <span v-if="analysisTime.detailed" class="time">⏱️ {{ analysisTime.detailed }}ms</span>
         </h4>
         

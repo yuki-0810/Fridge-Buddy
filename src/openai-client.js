@@ -27,7 +27,7 @@ export const imageToBase64 = (file) => {
 export const analyzeFridgeBasic = async (imageBase64) => {
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4-vision-preview",
+      model: "gpt-4o",
       messages: [
         {
           role: "user",
@@ -63,13 +63,13 @@ export const analyzeFridgeBasic = async (imageBase64) => {
     return {
       success: true,
       result: response.choices[0].message.content,
-      model: "gpt-4-vision-preview"
+      model: "gpt-4o"
     }
   } catch (error) {
     return {
       success: false,
       error: error.message,
-      model: "gpt-4-vision-preview"
+      model: "gpt-4o"
     }
   }
 }
@@ -82,7 +82,7 @@ export const analyzeFridgeDetailed = async (imageBase64, stockList = []) => {
 
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-4-vision-preview",
+      model: "gpt-4o",
       messages: [
         {
           role: "user",
@@ -126,13 +126,13 @@ export const analyzeFridgeDetailed = async (imageBase64, stockList = []) => {
     return {
       success: true,
       result: response.choices[0].message.content,
-      model: "gpt-4-vision-preview"
+      model: "gpt-4o"
     }
   } catch (error) {
     return {
       success: false,
       error: error.message,
-      model: "gpt-4-vision-preview"
+      model: "gpt-4o"
     }
   }
 }
