@@ -1,10 +1,11 @@
 <script setup>
 import { ref } from 'vue'
 import SupabaseTest from './SupabaseTest.vue'
+import FridgeVisionTest from './FridgeVisionTest.vue'
 
 const appTitle = ref('Fridge Buddy')
 const subtitle = ref('あなたの冷蔵庫を賢く管理')
-const activeTab = ref('home') // 'home' または 'test'
+const activeTab = ref('home') // 'home', 'test', 'vision'
 
 const switchTab = (tab) => {
   activeTab.value = tab
@@ -32,6 +33,12 @@ const switchTab = (tab) => {
           >
             Supabaseテスト
           </button>
+          <button 
+            @click="switchTab('vision')" 
+            :class="['tab-btn', { active: activeTab === 'vision' }]"
+          >
+            Vision AIテスト
+          </button>
         </nav>
       </div>
     </header>
@@ -50,7 +57,11 @@ const switchTab = (tab) => {
             </div>
             
             <div class="test-note">
-              <p>💡 <strong>開発中:</strong> 上部の「Supabaseテスト」タブから接続・認証・DB操作をテストできます</p>
+              <p>💡 <strong>開発中:</strong></p>
+              <ul>
+                <li>「Supabaseテスト」- 接続・認証・DB操作をテスト</li>
+                <li>「Vision AIテスト」- OpenAI画像解析の精度比較テスト</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -58,6 +69,11 @@ const switchTab = (tab) => {
         <!-- Supabaseテストタブ -->
         <div v-if="activeTab === 'test'" class="tab-content">
           <SupabaseTest />
+        </div>
+        
+        <!-- Vision AIテストタブ -->
+        <div v-if="activeTab === 'vision'" class="tab-content">
+          <FridgeVisionTest />
         </div>
       </div>
     </main>
@@ -95,6 +111,7 @@ const switchTab = (tab) => {
   justify-content: center;
   gap: 0.5rem;
   margin-top: 1rem;
+  flex-wrap: wrap;
 }
 
 .tab-btn {
@@ -106,6 +123,7 @@ const switchTab = (tab) => {
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 1rem;
+  white-space: nowrap;
 }
 
 .tab-btn:hover {
@@ -162,12 +180,23 @@ const switchTab = (tab) => {
   border-radius: 0.5rem;
   padding: 1rem;
   margin-top: 2rem;
+  text-align: left;
 }
 
 .test-note p {
   color: #9a3412;
   font-size: 0.9rem;
-  margin: 0;
+  margin-bottom: 0.5rem;
+}
+
+.test-note ul {
+  color: #9a3412;
+  font-size: 0.9rem;
+  margin-left: 1.5rem;
+}
+
+.test-note ul li {
+  margin-bottom: 0.25rem;
 }
 
 /* レスポンシブ対応 */
