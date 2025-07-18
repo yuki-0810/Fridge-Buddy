@@ -263,8 +263,8 @@ const switchSection = (section) => {
 
 // Fine-Tuning開始
 const startTraining = async () => {
-  if (stats.value.totalSamples < 10) {
-    alert('最低10サンプル以上が必要です')
+  if (stats.value.totalSamples < 2) {
+    alert('最低2サンプル以上が必要です')
     return
   }
 
@@ -634,8 +634,8 @@ const addManualItem = (imageId) => {
         <div class="requirements">
           <h4>📋 学習要件</h4>
           <ul>
-            <li>最小サンプル数: 10以上 <span :class="stats.totalSamples >= 10 ? 'check-ok' : 'check-ng'">{{ stats.totalSamples >= 10 ? '✅' : '❌' }}</span></li>
-            <li>推奨サンプル数: 50以上 <span :class="stats.totalSamples >= 50 ? 'check-ok' : 'check-ng'">{{ stats.totalSamples >= 50 ? '✅' : '❌' }}</span></li>
+            <li>最小サンプル数: 2以上 <span :class="stats.totalSamples >= 2 ? 'check-ok' : 'check-ng'">{{ stats.totalSamples >= 2 ? '✅' : '❌' }}</span></li>
+            <li>推奨サンプル数: 5以上 <span :class="stats.totalSamples >= 5 ? 'check-ok' : 'check-ng'">{{ stats.totalSamples >= 5 ? '✅' : '❌' }}</span></li>
             <li>各サンプルにラベル付き <span class="check-ok">✅</span></li>
           </ul>
         </div>
@@ -650,7 +650,7 @@ const addManualItem = (imageId) => {
 
       <div class="train-actions">
         <button 
-          :disabled="stats.totalSamples < 10 || isTraining"
+          :disabled="stats.totalSamples < 2 || isTraining"
           class="btn btn-primary"
           @click="startTraining"
         >
