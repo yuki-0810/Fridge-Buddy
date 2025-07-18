@@ -425,13 +425,57 @@ const clearResults = () => {
   analysisTime.value = {}
   filteredResults.value = {}
 }
+
+const appTitle = ref('Fridge Buddy')
+const subtitle = ref('あなたの冷蔵庫を賢く管理')
+const activeTab = ref('home') // 'home', 'test', 'vision', 'training'
+
+const switchTab = (tab) => {
+  activeTab.value = tab
+}
 </script>
 
 <template>
   <div class="vision-test">
     <h2>🔍 OpenAI Vision 冷蔵庫画像解析テスト</h2>
     
-    <div class="test-info">
+    <!-- タブナビゲーション -->
+    <nav class="tab-nav">
+      <button 
+        @click="switchTab('home')" 
+        :class="['tab-btn', { active: activeTab === 'home' }]"
+      >
+        ホーム
+      </button>
+      <button 
+        @click="switchTab('test')" 
+        :class="['tab-btn', { active: activeTab === 'test' }]"
+      >
+        Supabaseテスト
+      </button>
+      <button 
+        @click="switchTab('vision')" 
+        :class="['tab-btn', { active: activeTab === 'vision' }]"
+      >
+        Vision AIテスト
+      </button>
+      <button 
+        @click="switchTab('training')" 
+        :class="['tab-btn', { active: activeTab === 'training' }]"
+      >
+        モデル学習
+      </button>
+    </nav>
+
+    <div v-if="activeTab === 'home'" class="home-content">
+      <h3>{{ appTitle }}</h3>
+      <p>{{ subtitle }}</p>
+      <p>このアプリケーションは、OpenAI Vision APIを使用して冷蔵庫内の食材を検出し、その結果をJSON形式で出力します。</p>
+      <p>テストページでは、異なるモデル（基本版、詳細版、軽量版）を比較し、精度とレスポンス時間を確認できます。</p>
+      <p>また、Fine-Tuning用のデータ収集タブも用意しており、ユーザーが自分の冷蔵庫の画像とラベルをアップロードできます。</p>
+    </div>
+
+    <div v-if="activeTab === 'test'" class="test-info">
       <h3>📊 モデル比較テスト</h3>
       <p>3つの異なるアプローチで冷蔵庫画像を解析し、精度とレスポンス時間を比較します：</p>
       <ul>
@@ -442,8 +486,8 @@ const clearResults = () => {
     </div>
 
     <!-- 画像アップロード -->
-    <section class="upload-section">
-      <h3>�� 冷蔵庫画像をアップロード</h3>
+    <section v-if="activeTab === 'vision'" class="upload-section">
+      <h3>🖼️ 冷蔵庫画像をアップロード</h3>
       
       <!-- 撮影ガイダンス -->
       <div class="photo-guidance">
@@ -506,7 +550,7 @@ const clearResults = () => {
     </section>
 
     <!-- 常備食材リスト -->
-    <section class="stock-section">
+    <section v-if="activeTab === 'vision'" class="stock-section">
       <h3>📝 常備食材リスト（詳細版で使用）</h3>
       <div class="stock-input">
         <input 
@@ -531,7 +575,7 @@ const clearResults = () => {
     </section>
 
     <!-- 解析実行 -->
-    <section class="analyze-section">
+    <section v-if="activeTab === 'vision'" class="analyze-section">
       <h3>🚀 解析実行</h3>
       
       <!-- 精度向上オプション -->
@@ -624,7 +668,7 @@ const clearResults = () => {
     </section>
 
     <!-- 解析結果 -->
-    <section v-if="basicResult || detailedResult || lightweightResult" class="results-section">
+    <section v-if="activeTab === 'vision'" v-if="basicResult || detailedResult || lightweightResult" class="results-section">
       <h3>📊 解析結果</h3>
       
       <!-- 基本版結果 -->

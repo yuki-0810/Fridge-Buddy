@@ -2,10 +2,11 @@
 import { ref } from 'vue'
 import SupabaseTest from './SupabaseTest.vue'
 import FridgeVisionTest from './FridgeVisionTest.vue'
+import FridgeTraining from './FridgeTraining.vue'
 
 const appTitle = ref('Fridge Buddy')
 const subtitle = ref('あなたの冷蔵庫を賢く管理')
-const activeTab = ref('home') // 'home', 'test', 'vision'
+const activeTab = ref('home') // 'home', 'test', 'vision', 'training'
 
 const switchTab = (tab) => {
   activeTab.value = tab
@@ -38,6 +39,12 @@ const switchTab = (tab) => {
             :class="['tab-btn', { active: activeTab === 'vision' }]"
           >
             Vision AIテスト
+          </button>
+          <button 
+            @click="switchTab('training')" 
+            :class="['tab-btn', { active: activeTab === 'training' }]"
+          >
+            モデル学習
           </button>
         </nav>
       </div>
@@ -74,6 +81,11 @@ const switchTab = (tab) => {
         <!-- Vision AIテストタブ -->
         <div v-if="activeTab === 'vision'" class="tab-content">
           <FridgeVisionTest />
+        </div>
+        
+        <!-- モデル学習タブ -->
+        <div v-if="activeTab === 'training'" class="tab-content">
+          <FridgeTraining />
         </div>
       </div>
     </main>
