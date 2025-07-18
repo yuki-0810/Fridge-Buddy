@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { imageToBase64 } from '../openai-client.js'
+import { imageToBase64, analyzeFridgeBasic } from '../openai-client.js'
 
 // リアクティブ変数
 const activeSection = ref('collect') // 'collect', 'manage', 'train'
@@ -24,60 +24,14 @@ const editingItem = ref({
 const analyzeImageWithAI = async (imageBase64) => {
   try {
     console.log('OpenAI Vision API呼び出し開始...')
-    const response = await fetch('/api/openai-vision', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: `この冷蔵庫の画像を分析して、食材や飲み物を検出してください。以下の形式でJSONを返してください：
-
-{
-  "detected_items": [
-    {
-      "name": "食材名（例：牛乳、卵、りんご等）",
-      "quantity": "残量（多い/普通/少ない/なし）",
-      "confidence": "信頼度（0-100の数値）"
-    }
-  ]
-}
-
-・食材や飲み物の中身を重視してください（容器ではなく内容物）
-・一般的な食材名で回答してください
-・見えているものだけを検出してください`
-              },
-              {
-                type: 'image_url',
-                image_url: {
-                  url: imageBase64
-                }
-              }
-            ]
-          }
-        ],
-        max_tokens: 1000
-      })
-    })
-
-    console.log('API Response Status:', response.status)
+    const response = await analyzeFridgeBasic(imageBase64)
+    console.log('AI Response:', response)
     
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.error('API Error Response:', errorText)
-      throw new Error(`GPT-4o API error: ${response.status} - ${errorText}`)
+    if (!response.success) {
+      throw new Error(`GPT-4o API error: ${response.error}`)
     }
-
-    const data = await response.json()
-    console.log('AI Response:', data)
     
-    const content = data.choices[0].message.content
+    const content = response.result
     console.log('AI Content:', content)
 
     // JSONレスポンスをパース
