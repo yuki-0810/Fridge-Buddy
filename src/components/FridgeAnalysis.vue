@@ -187,18 +187,20 @@ const generateShoppingList = () => {
     return
   }
 
-  // 検出された食材を収集
+  // 検出された食材を収集（量の情報も含む）
   const detectedItems = Object.values(capturedImages.value)
     .flatMap(area => area.detected_items || [])
-    .map(item => item.name.toLowerCase())
 
   // 常備食材と照合して不足分を抽出
   const missing = inventoryItems.value.filter(inventoryItem => {
-    const found = detectedItems.some(detectedName => 
-      detectedName.includes(inventoryItem.name.toLowerCase()) ||
-      inventoryItem.name.toLowerCase().includes(detectedName)
+    // この常備食材が検出されているかチェック
+    const detectedItem = detectedItems.find(detectedItem => 
+      detectedItem.name.toLowerCase().includes(inventoryItem.name.toLowerCase()) ||
+      inventoryItem.name.toLowerCase().includes(detectedItem.name.toLowerCase())
     )
-    return !found
+    
+    // 検出されていない、または検出されていても量が「少ない」なら買い物リストに追加
+    return !detectedItem || detectedItem.quantity === '少ない'
   })
 
   missingItems.value = missing.map(item => ({
@@ -485,7 +487,6 @@ const removeImage = (areaId) => {
                         <option value="多い">多い</option>
                         <option value="普通">普通</option>
                         <option value="少ない">少ない</option>
-                        <option value="なし">なし</option>
                       </select>
                       <div class="edit-actions">
                         <button @click="saveEditingItem()" class="btn btn-primary btn-sm">✅</button>
