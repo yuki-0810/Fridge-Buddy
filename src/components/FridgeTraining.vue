@@ -8,7 +8,82 @@ const trainingData = ref([]) // 収集したトレーニングデータ
 const currentImages = ref([]) // 現在アップロード中の画像
 const currentLabels = ref({}) // 現在の画像のラベル
 const isUploading = ref(false)
+const isAnalyzing = ref(false) // AI分析中フラグ
 const isTraining = ref(false)
+
+// 編集中の食材
+const editingItem = ref({
+  imageId: null,
+  itemId: null,
+  name: '',
+  quantity: '普通'
+})
+
+// GPT-4oによる自動食材検出
+const analyzeImageWithAI = async (imageBase64) => {
+  try {
+    const response = await fetch('/api/openai-vision', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `この冷蔵庫の画像を分析して、食材や飲み物を検出してください。以下の形式でJSONを返してください：
+
+{
+  "detected_items": [
+    {
+      "name": "食材名（例：牛乳、卵、りんご等）",
+      "quantity": "残量（多い/普通/少ない/なし）",
+      "confidence": "信頼度（0-100の数値）"
+    }
+  ]
+}
+
+・食材や飲み物の中身を重視してください（容器ではなく内容物）
+・一般的な食材名で回答してください
+・見えているものだけを検出してください`
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageBase64
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 1000
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`GPT-4o API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+    const content = data.choices[0].message.content
+
+    // JSONレスポンスをパース
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      const result = JSON.parse(jsonMatch[0])
+      return result.detected_items || []
+    }
+    
+    return []
+  } catch (error) {
+    console.error('AI食材検出エラー:', error)
+    return []
+  }
+}
 
 // 統計情報
 const stats = computed(() => {
@@ -47,11 +122,29 @@ const handleFilesChange = async (event) => {
         
         // 初期ラベルを設定
         currentLabels.value[imageId] = []
+        
+        // AI分析を開始
+        isAnalyzing.value = true
+        const detectedItems = await analyzeImageWithAI(base64)
+        
+        // 検出された食材をラベルとして追加
+        detectedItems.forEach((item, index) => {
+          currentLabels.value[imageId].push({
+            id: `ai_item_${imageId}_${index}_${Date.now()}`,
+            name: item.name,
+            quantity: item.quantity || '普通',
+            confidence: item.confidence || 80,
+            isAiGenerated: true
+          })
+        })
+        
+        isAnalyzing.value = false
       }
     }
   } catch (error) {
     console.error('画像アップロードエラー:', error)
     alert('画像のアップロードに失敗しました')
+    isAnalyzing.value = false
   } finally {
     isUploading.value = false
   }
@@ -254,6 +347,59 @@ const startTraining = async () => {
     isTraining.value = false
   }
 }
+
+// 食材編集開始
+const startEditingItem = (imageId, item) => {
+  editingItem.value = {
+    imageId: imageId,
+    itemId: item.id,
+    name: item.name,
+    quantity: item.quantity
+  }
+}
+
+// 食材編集保存
+const saveEditingItem = () => {
+  if (!editingItem.value.imageId || !editingItem.value.itemId) return
+  
+  const labels = currentLabels.value[editingItem.value.imageId]
+  const itemIndex = labels.findIndex(item => item.id === editingItem.value.itemId)
+  
+  if (itemIndex !== -1) {
+    labels[itemIndex].name = editingItem.value.name
+    labels[itemIndex].quantity = editingItem.value.quantity
+  }
+  
+  cancelEditing()
+}
+
+// 編集キャンセル
+const cancelEditing = () => {
+  editingItem.value = {
+    imageId: null,
+    itemId: null,
+    name: '',
+    quantity: '普通'
+  }
+}
+
+// 手動で食材追加
+const addManualItem = (imageId) => {
+  if (!currentLabels.value[imageId]) {
+    currentLabels.value[imageId] = []
+  }
+
+  const newItem = {
+    id: `manual_item_${imageId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    name: '新しい食材',
+    quantity: '普通',
+    confidence: 100,
+    isAiGenerated: false
+  }
+
+  currentLabels.value[imageId].push(newItem)
+  startEditingItem(imageId, newItem)
+}
 </script>
 
 <template>
@@ -307,75 +453,84 @@ const startTraining = async () => {
           :disabled="isUploading"
         >
         
-        <div v-if="isUploading" class="upload-status">
-          <p>📤 アップロード中...</p>
+        <div v-if="isUploading || isAnalyzing" class="upload-status">
+          <p v-if="isUploading">📤 アップロード中...</p>
+          <p v-if="isAnalyzing">🤖 AI分析中... GPT-4oが食材を検出しています</p>
         </div>
       </div>
 
       <!-- アップロードした画像の表示とラベル付け -->
       <div v-if="currentImages.length > 0" class="labeling-panel">
-        <h4>🏷️ 食材ラベル付け</h4>
+        <h4>🤖 AI検出結果と食材編集</h4>
+        <p class="ai-info">
+          💡 GPT-4oが自動で食材を検出しました。結果を確認して、必要に応じて編集・追加してください。
+        </p>
         
         <div class="images-grid">
           <div v-for="image in currentImages" :key="image.id" class="image-item">
-            <div class="image-preview">
-              <img :src="image.base64" :alt="image.name" />
+            <!-- 画像表示（縦横比保持） -->
+            <div class="image-container">
+              <img :src="image.base64" :alt="image.name" class="food-image" />
               <p class="image-name">{{ image.name }}</p>
             </div>
             
-            <div class="labeling-form">
-              <h5>この画像の食材:</h5>
-              
-              <!-- 新しい食材追加フォーム -->
-              <div class="add-item-form">
-                <input 
-                  type="text" 
-                  placeholder="食材名"
-                  class="item-input"
-                  :id="`item-name-${image.id}`"
-                >
-                <select class="item-select" :id="`item-quantity-${image.id}`">
-                  <option value="多い">多い</option>
-                  <option value="普通" selected>普通</option>
-                  <option value="少ない">少ない</option>
-                  <option value="なし">なし</option>
-                </select>
-                <input 
-                  type="text" 
-                  placeholder="位置（上段/中段/下段等）"
-                  class="item-input"
-                  :id="`item-location-${image.id}`"
-                >
-                <button 
-                  @click="addItemLabel(
-                    image.id,
-                    document.getElementById(`item-name-${image.id}`).value,
-                    document.getElementById(`item-quantity-${image.id}`).value,
-                    document.getElementById(`item-location-${image.id}`).value
-                  )"
-                  class="btn btn-secondary"
-                >
-                  追加
+            <!-- AI検出結果と編集 -->
+            <div class="detected-items-section">
+              <div class="section-header">
+                <h5>🔍 検出された食材</h5>
+                <button @click="addManualItem(image.id)" class="btn btn-secondary">
+                  ➕ 手動追加
                 </button>
               </div>
               
-              <!-- 追加済み食材リスト -->
-              <div v-if="currentLabels[image.id] && currentLabels[image.id].length > 0" class="labeled-items">
+              <!-- 検出された食材一覧 -->
+              <div v-if="currentLabels[image.id] && currentLabels[image.id].length > 0" class="items-list">
                 <div 
                   v-for="item in currentLabels[image.id]" 
                   :key="item.id"
-                  class="labeled-item"
+                  class="item-row"
+                  :class="{ 'ai-generated': item.isAiGenerated, 'manual': !item.isAiGenerated }"
                 >
-                  <span class="item-info">
-                    <strong>{{ item.name }}</strong> - {{ item.quantity }} ({{ item.location }})
-                  </span>
-                  <button 
-                    @click="removeItemLabel(image.id, item.id)"
-                    class="remove-btn"
-                  >
-                    ×
-                  </button>
+                  <!-- 編集モード -->
+                  <div v-if="editingItem.itemId === item.id" class="editing-mode">
+                    <input 
+                      v-model="editingItem.name"
+                      type="text" 
+                      placeholder="食材名"
+                      class="edit-input"
+                    >
+                    <select v-model="editingItem.quantity" class="edit-select">
+                      <option value="多い">多い</option>
+                      <option value="普通">普通</option>
+                      <option value="少ない">少ない</option>
+                      <option value="なし">なし</option>
+                    </select>
+                    <div class="edit-actions">
+                      <button @click="saveEditingItem()" class="btn btn-primary btn-sm">✅ 保存</button>
+                      <button @click="cancelEditing()" class="btn btn-secondary btn-sm">❌ キャンセル</button>
+                    </div>
+                  </div>
+                  
+                  <!-- 表示モード -->
+                  <div v-else class="display-mode">
+                    <div class="item-info">
+                      <span class="item-name">{{ item.name }}</span>
+                      <span class="item-quantity">{{ item.quantity }}</span>
+                      <span v-if="item.confidence" class="confidence">{{ item.confidence }}%</span>
+                      <span class="source-badge">{{ item.isAiGenerated ? 'AI' : '手動' }}</span>
+                    </div>
+                    <div class="item-actions">
+                      <button @click="startEditingItem(image.id, item)" class="btn btn-secondary btn-sm">✏️ 編集</button>
+                      <button @click="removeItemLabel(image.id, item.id)" class="btn btn-danger btn-sm">🗑️ 削除</button>
+                    </div>
+                  </div>
                 </div>
+              </div>
+              
+              <!-- 食材が検出されなかった場合 -->
+              <div v-else class="no-items">
+                <p>食材が検出されませんでした。手動で追加してください。</p>
+                <button @click="addManualItem(image.id)" class="btn btn-primary">➕ 食材を追加</button>
               </div>
             </div>
           </div>
@@ -571,12 +726,26 @@ const startTraining = async () => {
   text-align: center;
   color: #6b7280;
   margin-top: 1rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
+}
+
+.ai-info {
+  background: #dbeafe;
+  border: 1px solid #93c5fd;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  color: #1e40af;
+  font-size: 0.875rem;
 }
 
 .images-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 2rem;
   margin-top: 1rem;
 }
 
@@ -584,88 +753,234 @@ const startTraining = async () => {
   border: 1px solid #e2e8f0;
   border-radius: 0.5rem;
   overflow: hidden;
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.image-preview {
+/* 画像表示（縦横比保持） */
+.image-container {
   position: relative;
-}
-
-.image-preview img {
-  width: 100%;
-  height: 200px;
-  object-fit: cover;
-}
-
-.image-name {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  padding: 0.5rem;
-  margin: 0;
-  font-size: 0.75rem;
-}
-
-.labeling-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #f8fafc;
   padding: 1rem;
 }
 
-.labeling-form h5 {
-  margin-bottom: 0.75rem;
-  color: #374151;
+.food-image {
+  max-width: 100%;
+  max-height: 300px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.add-item-form {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr auto;
-  gap: 0.5rem;
+.image-name {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: #374151;
+  text-align: center;
+  word-break: break-all;
+}
+
+/* AI検出結果セクション */
+.detected-items-section {
+  padding: 1.5rem;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.section-header h5 {
+  margin: 0;
+  color: #374151;
+  font-size: 1rem;
+}
+
+/* 食材一覧 */
+.items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.item-row {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  transition: all 0.2s ease;
+}
+
+.item-row.ai-generated {
+  border-left: 4px solid #10b981;
+  background: #f0fdf4;
+}
+
+.item-row.manual {
+  border-left: 4px solid #f59e0b;
+  background: #fffbeb;
+}
+
+.item-row:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* 表示モード */
+.display-mode {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
 }
 
-.item-input, .item-select {
+.item-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.875rem;
+}
+
+.item-name {
+  font-weight: bold;
+  color: #1f2937;
+}
+
+.item-quantity {
+  background: #e5e7eb;
+  color: #374151;
+  padding: 0.125rem 0.5rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+}
+
+.confidence {
+  background: #ddd6fe;
+  color: #5b21b6;
+  padding: 0.125rem 0.375rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.source-badge {
+  padding: 0.125rem 0.375rem;
+  border-radius: 1rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.item-row.ai-generated .source-badge {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.item-row.manual .source-badge {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.item-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* 編集モード */
+.editing-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.edit-input, .edit-select {
   padding: 0.5rem;
   border: 1px solid #cbd5e0;
   border-radius: 0.25rem;
   font-size: 0.875rem;
+  background: white;
 }
 
-.labeled-items {
-  max-height: 150px;
-  overflow-y: auto;
+.edit-input:focus, .edit-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
 }
 
-.labeled-item {
+.edit-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem;
-  background: #f1f5f9;
-  border-radius: 0.25rem;
-  margin-bottom: 0.5rem;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 
-.item-info {
-  font-size: 0.875rem;
-  color: #374151;
+/* 食材が検出されなかった場合 */
+.no-items {
+  text-align: center;
+  padding: 2rem;
+  color: #6b7280;
+  background: #f9fafb;
+  border-radius: 0.5rem;
+  border: 2px dashed #d1d5db;
 }
 
-.remove-btn {
-  background: #ef4444;
-  color: white;
+.no-items p {
+  margin-bottom: 1rem;
+}
+
+/* ボタンスタイル */
+.btn {
+  padding: 0.5rem 1rem;
   border: none;
-  border-radius: 50%;
-  width: 1.5rem;
-  height: 1.5rem;
-  font-size: 0.75rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+  font-weight: 500;
   cursor: pointer;
-  display: flex;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
+.btn-sm {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.btn-primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #2563eb;
+}
+
+.btn-secondary {
+  background: #6b7280;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background: #4b5563;
+}
+
+.btn-danger {
+  background: #ef4444;
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+}
+
+/* 保存パネル */
 .save-panel {
   text-align: center;
   margin-top: 2rem;
@@ -674,6 +989,7 @@ const startTraining = async () => {
   border-radius: 0.5rem;
 }
 
+/* 統計グリッド */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -804,8 +1120,14 @@ const startTraining = async () => {
     flex-direction: column;
   }
   
-  .add-item-form {
+  .images-grid {
     grid-template-columns: 1fr;
+  }
+  
+  .display-mode {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
   }
   
   .export-actions {
@@ -815,6 +1137,10 @@ const startTraining = async () => {
   .sample-header {
     flex-direction: column;
     gap: 0.5rem;
+  }
+  
+  .edit-actions {
+    justify-content: flex-start;
   }
 }
 </style> 
