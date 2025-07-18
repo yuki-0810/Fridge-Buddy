@@ -7,8 +7,9 @@ const activeSection = ref('collect') // 'collect', 'manage', 'train'
 const trainingData = ref([]) // 収集したトレーニングデータ
 const currentImages = ref([]) // 現在アップロード中の画像
 const currentLabels = ref({}) // 現在の画像のラベル
+const imageAnalysisStatus = ref({}) // 画像ごとの分析状況 { imageId: 'analyzing' | 'completed' | 'error' }
 const isUploading = ref(false)
-const isAnalyzing = ref(false) // AI分析中フラグ
+const isAnalyzing = ref(false) // 全体の分析中フラグ
 const isTraining = ref(false)
 
 // 編集中の食材
@@ -22,6 +23,7 @@ const editingItem = ref({
 // GPT-4oによる自動食材検出
 const analyzeImageWithAI = async (imageBase64) => {
   try {
+    console.log('OpenAI Vision API呼び出し開始...')
     const response = await fetch('/api/openai-vision', {
       method: 'POST',
       headers: {
@@ -64,24 +66,34 @@ const analyzeImageWithAI = async (imageBase64) => {
       })
     })
 
+    console.log('API Response Status:', response.status)
+    
     if (!response.ok) {
-      throw new Error(`GPT-4o API error: ${response.status}`)
+      const errorText = await response.text()
+      console.error('API Error Response:', errorText)
+      throw new Error(`GPT-4o API error: ${response.status} - ${errorText}`)
     }
 
     const data = await response.json()
+    console.log('AI Response:', data)
+    
     const content = data.choices[0].message.content
+    console.log('AI Content:', content)
 
     // JSONレスポンスをパース
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
       const result = JSON.parse(jsonMatch[0])
+      console.log('Parsed Result:', result)
       return result.detected_items || []
+    } else {
+      console.warn('JSONが見つかりませんでした:', content)
+      return []
     }
     
-    return []
   } catch (error) {
-    console.error('AI食材検出エラー:', error)
-    return []
+    console.error('AI食材検出エラー詳細:', error)
+    throw error // エラーを再スローして上位で処理
   }
 }
 
@@ -106,6 +118,7 @@ const handleFilesChange = async (event) => {
   isUploading.value = true
   currentImages.value = []
   currentLabels.value = {}
+  imageAnalysisStatus.value = {} // 画像分析状況をリセット
 
   try {
     for (const file of files) {
@@ -122,15 +135,24 @@ const handleFilesChange = async (event) => {
         
         // 初期ラベルを設定
         currentLabels.value[imageId] = []
-        
-        // AI分析を開始
+        imageAnalysisStatus.value[imageId] = 'analyzing' // 分析中状態に設定
+      }
+    }
+    
+    isUploading.value = false
+    
+    // 各画像を個別に分析
+    for (const image of currentImages.value) {
+      try {
+        console.log(`画像 ${image.name} の分析を開始...`)
         isAnalyzing.value = true
-        const detectedItems = await analyzeImageWithAI(base64)
+        const detectedItems = await analyzeImageWithAI(image.base64)
+        console.log(`画像 ${image.name} の分析結果:`, detectedItems)
         
         // 検出された食材をラベルとして追加
         detectedItems.forEach((item, index) => {
-          currentLabels.value[imageId].push({
-            id: `ai_item_${imageId}_${index}_${Date.now()}`,
+          currentLabels.value[image.id].push({
+            id: `ai_item_${image.id}_${index}_${Date.now()}`,
             name: item.name,
             quantity: item.quantity || '普通',
             confidence: item.confidence || 80,
@@ -138,15 +160,20 @@ const handleFilesChange = async (event) => {
           })
         })
         
-        isAnalyzing.value = false
+        imageAnalysisStatus.value[image.id] = 'completed' // 分析完了状態に設定
+        console.log(`画像 ${image.name} の分析完了`)
+      } catch (error) {
+        console.error(`画像 ${image.name} の分析エラー:`, error)
+        imageAnalysisStatus.value[image.id] = 'error' // エラー状態に設定
       }
     }
+    
+    isAnalyzing.value = false
+    
   } catch (error) {
     console.error('画像アップロードエラー:', error)
     alert('画像のアップロードに失敗しました')
     isAnalyzing.value = false
-  } finally {
-    isUploading.value = false
   }
 }
 
@@ -205,6 +232,7 @@ const saveTrainingData = () => {
   // リセット
   currentImages.value = []
   currentLabels.value = {}
+  imageAnalysisStatus.value = {} // 画像分析状況をリセット
   
   alert(`トレーニングデータを保存しました（合計: ${trainingData.value.length}サンプル）`)
 }
@@ -270,6 +298,7 @@ const clearAllData = () => {
     trainingData.value = []
     currentImages.value = []
     currentLabels.value = {}
+    imageAnalysisStatus.value = {} // 画像分析状況をリセット
   }
 }
 
@@ -478,59 +507,88 @@ const addManualItem = (imageId) => {
             <div class="detected-items-section">
               <div class="section-header">
                 <h5>🔍 検出された食材</h5>
-                <button @click="addManualItem(image.id)" class="btn btn-secondary">
+                <button 
+                  @click="addManualItem(image.id)" 
+                  class="btn btn-secondary"
+                  :disabled="imageAnalysisStatus[image.id] === 'analyzing'"
+                >
                   ➕ 手動追加
                 </button>
               </div>
               
-              <!-- 検出された食材一覧 -->
-              <div v-if="currentLabels[image.id] && currentLabels[image.id].length > 0" class="items-list">
-                <div 
-                  v-for="item in currentLabels[image.id]" 
-                  :key="item.id"
-                  class="item-row"
-                  :class="{ 'ai-generated': item.isAiGenerated, 'manual': !item.isAiGenerated }"
-                >
-                  <!-- 編集モード -->
-                  <div v-if="editingItem.itemId === item.id" class="editing-mode">
-                    <input 
-                      v-model="editingItem.name"
-                      type="text" 
-                      placeholder="食材名"
-                      class="edit-input"
-                    >
-                    <select v-model="editingItem.quantity" class="edit-select">
-                      <option value="多い">多い</option>
-                      <option value="普通">普通</option>
-                      <option value="少ない">少ない</option>
-                      <option value="なし">なし</option>
-                    </select>
-                    <div class="edit-actions">
-                      <button @click="saveEditingItem()" class="btn btn-primary btn-sm">✅ 保存</button>
-                      <button @click="cancelEditing()" class="btn btn-secondary btn-sm">❌ キャンセル</button>
-                    </div>
-                  </div>
-                  
-                  <!-- 表示モード -->
-                  <div v-else class="display-mode">
-                    <div class="item-info">
-                      <span class="item-name">{{ item.name }}</span>
-                      <span class="item-quantity">{{ item.quantity }}</span>
-                      <span v-if="item.confidence" class="confidence">{{ item.confidence }}%</span>
-                      <span class="source-badge">{{ item.isAiGenerated ? 'AI' : '手動' }}</span>
-                    </div>
-                    <div class="item-actions">
-                      <button @click="startEditingItem(image.id, item)" class="btn btn-secondary btn-sm">✏️ 編集</button>
-                      <button @click="removeItemLabel(image.id, item.id)" class="btn btn-danger btn-sm">🗑️ 削除</button>
-                    </div>
-                  </div>
+              <!-- 分析中の表示 -->
+              <div v-if="imageAnalysisStatus[image.id] === 'analyzing'" class="analysis-status analyzing">
+                <div class="status-icon">🤖</div>
+                <div class="status-text">
+                  <p><strong>GPT-4oで分析中...</strong></p>
+                  <p>食材を検出しています。少々お待ちください。</p>
                 </div>
               </div>
               
-              <!-- 食材が検出されなかった場合 -->
-              <div v-else class="no-items">
-                <p>食材が検出されませんでした。手動で追加してください。</p>
-                <button @click="addManualItem(image.id)" class="btn btn-primary">➕ 食材を追加</button>
+              <!-- 分析エラーの表示 -->
+              <div v-else-if="imageAnalysisStatus[image.id] === 'error'" class="analysis-status error">
+                <div class="status-icon">⚠️</div>
+                <div class="status-text">
+                  <p><strong>分析に失敗しました</strong></p>
+                  <p>手動で食材を追加してください。</p>
+                  <button @click="addManualItem(image.id)" class="btn btn-primary">➕ 食材を追加</button>
+                </div>
+              </div>
+              
+              <!-- 分析完了 - 検出された食材一覧 -->
+              <div v-else-if="imageAnalysisStatus[image.id] === 'completed'" class="analysis-completed">
+                <div v-if="currentLabels[image.id] && currentLabels[image.id].length > 0" class="items-list">
+                  <div 
+                    v-for="item in currentLabels[image.id]" 
+                    :key="item.id"
+                    class="item-row"
+                    :class="{ 'ai-generated': item.isAiGenerated, 'manual': !item.isAiGenerated }"
+                  >
+                    <!-- 編集モード -->
+                    <div v-if="editingItem.itemId === item.id" class="editing-mode">
+                      <input 
+                        v-model="editingItem.name"
+                        type="text" 
+                        placeholder="食材名"
+                        class="edit-input"
+                      >
+                      <select v-model="editingItem.quantity" class="edit-select">
+                        <option value="多い">多い</option>
+                        <option value="普通">普通</option>
+                        <option value="少ない">少ない</option>
+                        <option value="なし">なし</option>
+                      </select>
+                      <div class="edit-actions">
+                        <button @click="saveEditingItem()" class="btn btn-primary btn-sm">✅ 保存</button>
+                        <button @click="cancelEditing()" class="btn btn-secondary btn-sm">❌ キャンセル</button>
+                      </div>
+                    </div>
+                    
+                    <!-- 表示モード -->
+                    <div v-else class="display-mode">
+                      <div class="item-info">
+                        <span class="item-name">{{ item.name }}</span>
+                        <span class="item-quantity">{{ item.quantity }}</span>
+                        <span v-if="item.confidence" class="confidence">{{ item.confidence }}%</span>
+                        <span class="source-badge">{{ item.isAiGenerated ? 'AI' : '手動' }}</span>
+                      </div>
+                      <div class="item-actions">
+                        <button @click="startEditingItem(image.id, item)" class="btn btn-secondary btn-sm">✏️ 編集</button>
+                        <button @click="removeItemLabel(image.id, item.id)" class="btn btn-danger btn-sm">🗑️ 削除</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <!-- 食材が検出されなかった場合（分析完了後） -->
+                <div v-else class="no-items-detected">
+                  <div class="status-icon">🔍</div>
+                  <div class="status-text">
+                    <p><strong>食材が検出されませんでした</strong></p>
+                    <p>手動で食材を追加してください。</p>
+                    <button @click="addManualItem(image.id)" class="btn btn-primary">➕ 食材を追加</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -805,31 +863,97 @@ const addManualItem = (imageId) => {
   font-size: 1rem;
 }
 
-/* 食材一覧 */
-.items-list {
+/* 分析中の表示 */
+.analysis-status.analyzing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem;
+  background: #f0fdf4;
+  border: 1px solid #d1fae5;
+  border-radius: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.analysis-status.analyzing .status-icon {
+  font-size: 3rem;
+  color: #10b981;
+  margin-bottom: 0.5rem;
+}
+
+.analysis-status.analyzing .status-text {
+  text-align: center;
+  color: #065f46;
+}
+
+.analysis-status.analyzing .status-text p {
+  margin-bottom: 0.25rem;
+}
+
+/* 分析エラーの表示 */
+.analysis-status.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.analysis-status.error .status-icon {
+  font-size: 3rem;
+  color: #f59e0b;
+  margin-bottom: 0.5rem;
+}
+
+.analysis-status.error .status-text {
+  text-align: center;
+  color: #92400e;
+}
+
+.analysis-status.error .status-text p {
+  margin-bottom: 0.25rem;
+}
+
+.analysis-status.error .status-text button {
+  margin-top: 1rem;
+}
+
+/* 分析完了 - 検出された食材一覧 */
+.analysis-completed {
+  padding: 1.5rem;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.analysis-completed .items-list {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 
-.item-row {
+.analysis-completed .item-row {
   border: 1px solid #e2e8f0;
   border-radius: 0.5rem;
   padding: 1rem;
   transition: all 0.2s ease;
 }
 
-.item-row.ai-generated {
+.analysis-completed .item-row.ai-generated {
   border-left: 4px solid #10b981;
   background: #f0fdf4;
 }
 
-.item-row.manual {
+.analysis-completed .item-row.manual {
   border-left: 4px solid #f59e0b;
   background: #fffbeb;
 }
 
-.item-row:hover {
+.analysis-completed .item-row:hover {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
@@ -919,9 +1043,11 @@ const addManualItem = (imageId) => {
   justify-content: flex-end;
 }
 
-/* 食材が検出されなかった場合 */
-.no-items {
-  text-align: center;
+/* 食材が検出されなかった場合（分析完了後） */
+.no-items-detected {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   padding: 2rem;
   color: #6b7280;
   background: #f9fafb;
@@ -929,8 +1055,23 @@ const addManualItem = (imageId) => {
   border: 2px dashed #d1d5db;
 }
 
-.no-items p {
-  margin-bottom: 1rem;
+.no-items-detected .status-icon {
+  font-size: 3rem;
+  color: #9ca3af;
+  margin-bottom: 0.5rem;
+}
+
+.no-items-detected .status-text {
+  text-align: center;
+  color: #4b5563;
+}
+
+.no-items-detected .status-text p {
+  margin-bottom: 0.25rem;
+}
+
+.no-items-detected .status-text button {
+  margin-top: 1rem;
 }
 
 /* ボタンスタイル */
