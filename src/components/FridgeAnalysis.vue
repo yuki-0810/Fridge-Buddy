@@ -82,7 +82,8 @@ const analysisStats = computed(() => {
     capturedAreas,
     analyzedAreas,
     totalDetectedItems,
-    isComplete: analyzedAreas === totalAreas && totalAreas > 0
+    // アップロードされたエリアがすべて分析完了していて、かつ最低1つはアップロードされている場合に完了とする
+    isComplete: capturedAreas > 0 && analyzedAreas === capturedAreas
   }
 })
 
@@ -176,8 +177,13 @@ const analyzeAllImages = async () => {
 
 // 買い物リスト生成
 const generateShoppingList = () => {
+  if (Object.keys(capturedImages.value).length === 0) {
+    errorMessage.value = '冷蔵庫の写真を少なくとも1つアップロードしてください'
+    return
+  }
+
   if (!analysisStats.value.isComplete) {
-    errorMessage.value = 'すべてのエリアの分析が完了していません'
+    errorMessage.value = 'アップロードした画像の分析が完了していません'
     return
   }
 
