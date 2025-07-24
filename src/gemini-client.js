@@ -10,40 +10,62 @@ if (!apiKey) {
 
 const genAI = new GoogleGenerativeAI(apiKey)
 
-// 画像をリサイズして圧縮する関数
-const resizeAndCompressImage = (file, maxWidth = 1024, maxHeight = 768, quality = 0.8) => {
+// 画像をリサイズして圧縮する関数（より積極的な圧縮）
+const resizeAndCompressImage = (file, maxWidth = 800, maxHeight = 600, quality = 0.6) => {
   return new Promise((resolve, reject) => {
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
     const img = new Image()
 
     img.onload = () => {
-      // アスペクト比を保持しながらリサイズ
+      // より積極的なリサイズ（アスペクト比保持）
       let { width, height } = img
       
-      if (width > height) {
-        if (width > maxWidth) {
-          height = (height * maxWidth) / width
-          width = maxWidth
-        }
-      } else {
-        if (height > maxHeight) {
-          width = (width * maxHeight) / height
-          height = maxHeight
+      // 最大サイズをより小さく制限
+      const aspectRatio = width / height
+      
+      if (width > maxWidth || height > maxHeight) {
+        if (aspectRatio > 1) {
+          // 横長の場合
+          width = Math.min(width, maxWidth)
+          height = width / aspectRatio
+          if (height > maxHeight) {
+            height = maxHeight
+            width = height * aspectRatio
+          }
+        } else {
+          // 縦長の場合
+          height = Math.min(height, maxHeight)
+          width = height * aspectRatio
+          if (width > maxWidth) {
+            width = maxWidth
+            height = width / aspectRatio
+          }
         }
       }
 
-      canvas.width = width
-      canvas.height = height
+      canvas.width = Math.floor(width)
+      canvas.height = Math.floor(height)
+
+      // 背景を白で塗りつぶし（透明度対応）
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
 
       // 画像を描画
-      ctx.drawImage(img, 0, 0, width, height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
 
       // JPEGとして圧縮してBase64に変換
       canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error('画像圧縮に失敗しました'))
+          return
+        }
+        
         const reader = new FileReader()
         reader.onload = () => {
           const base64 = reader.result.split(',')[1]
+          const compressedSizeKB = Math.round(base64.length * 0.75 / 1024)
+          console.log(`圧縮完了: ${compressedSizeKB}KB (元: ${Math.round(file.size/1024)}KB)`)
           resolve(base64)
         }
         reader.onerror = reject
@@ -51,23 +73,37 @@ const resizeAndCompressImage = (file, maxWidth = 1024, maxHeight = 768, quality 
       }, 'image/jpeg', quality)
     }
 
-    img.onerror = reject
+    img.onerror = () => reject(new Error('画像の読み込みに失敗しました'))
     img.src = URL.createObjectURL(file)
   })
 }
 
-// 画像をbase64に変換する関数（圧縮対応）
+// 画像をbase64に変換する関数（超積極的圧縮対応）
 export const imageToBase64 = async (file) => {
   try {
-    // ファイルサイズが2MB以上の場合は圧縮
-    if (file.size > 2 * 1024 * 1024) {
-      console.log('大きな画像を圧縮中...', `${(file.size / 1024 / 1024).toFixed(2)}MB`)
-      return await resizeAndCompressImage(file, 1024, 768, 0.7)
-    } else if (file.size > 1 * 1024 * 1024) {
-      console.log('中サイズ画像を軽圧縮中...', `${(file.size / 1024 / 1024).toFixed(2)}MB`)
-      return await resizeAndCompressImage(file, 1280, 960, 0.8)
+    const fileSizeMB = file.size / 1024 / 1024
+    console.log(`画像処理開始: ${fileSizeMB.toFixed(2)}MB`)
+    
+    // すべての画像を積極的に圧縮（Gemini API制限対応）
+    if (fileSizeMB > 5) {
+      // 非常に大きな画像：最大圧縮
+      console.log('超大容量画像: 最大圧縮実行中...')
+      return await resizeAndCompressImage(file, 640, 480, 0.4)
+    } else if (fileSizeMB > 2) {
+      // 大きな画像：強圧縮
+      console.log('大容量画像: 強圧縮実行中...')
+      return await resizeAndCompressImage(file, 800, 600, 0.5)
+    } else if (fileSizeMB > 1) {
+      // 中サイズ画像：中圧縮
+      console.log('中容量画像: 中圧縮実行中...')
+      return await resizeAndCompressImage(file, 1024, 768, 0.6)
+    } else if (fileSizeMB > 0.5) {
+      // 小さめの画像：軽圧縮
+      console.log('小容量画像: 軽圧縮実行中...')
+      return await resizeAndCompressImage(file, 1280, 960, 0.7)
     } else {
-      // 小さな画像はそのまま
+      // 非常に小さな画像：そのまま
+      console.log('最小サイズ画像: 無圧縮')
       return new Promise((resolve, reject) => {
         const reader = new FileReader()
         reader.readAsDataURL(file)
@@ -79,16 +115,15 @@ export const imageToBase64 = async (file) => {
       })
     }
   } catch (error) {
-    // エラーの場合は元の方法でフォールバック
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.readAsDataURL(file)
-      reader.onload = () => {
-        const base64 = reader.result.split(',')[1]
-        resolve(base64)
-      }
-      reader.onerror = error => reject(error)
-    })
+    console.error('画像圧縮エラー:', error)
+    // エラーの場合は最小サイズで強制圧縮
+    try {
+      console.log('フォールバック: 強制最小圧縮実行中...')
+      return await resizeAndCompressImage(file, 512, 384, 0.3)
+    } catch (fallbackError) {
+      console.error('フォールバック圧縮も失敗:', fallbackError)
+      throw new Error('画像の処理に失敗しました。より小さな画像をお試しください。')
+    }
   }
 }
 

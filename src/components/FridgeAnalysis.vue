@@ -142,11 +142,23 @@ const analyzeImage = async (areaId) => {
     console.log('常備食材リスト:', stockList)
     console.log('プロンプトマップ:', promptMap.value)
     
+    // Base64サイズをチェック
+    const base64SizeKB = Math.round(imageData.base64.length * 0.75 / 1024)
+    console.log(`送信データサイズ: ${base64SizeKB}KB`)
+    
+    if (base64SizeKB > 1000) {
+      throw new Error('画像サイズが大きすぎます。より小さな画像をお選びください。')
+    }
+    
     const response = await analyzeFridgeWithYOLO(imageData.base64, stockList, promptMap.value)
     
     console.log('Gemini YOLO Response:', response)
     
     if (!response.success) {
+      // 空のレスポンスの場合の特別処理
+      if (!response.rawResponse || response.rawResponse.trim() === '') {
+        throw new Error('Gemini APIからの応答がありません。画像サイズを小さくして再試行してください。')
+      }
       throw new Error(response.error || 'AI分析に失敗しました')
     }
     
@@ -181,10 +193,10 @@ const analyzeImage = async (areaId) => {
     imageData.analysis_status = 'completed'
     console.log(`${CAMERA_AREAS.find(a => a.id === areaId)?.name}の分析完了`)
     
-    // すべてのエリアが分析完了した場合、統合解析を実行
-    if (analysisStats.value.isComplete) {
-      await performIntegratedAnalysis()
-    }
+    // 統合解析は一時的に無効化（414エラー対策）
+    // if (analysisStats.value.isComplete) {
+    //   await performIntegratedAnalysis()
+    // }
     
   } catch (error) {
     console.error('AI分析エラー:', error)
@@ -193,6 +205,8 @@ const analyzeImage = async (areaId) => {
     // エラーメッセージをより具体的に
     if (error.message.includes('414') || error.message.includes('URI Too Long')) {
       errorMessage.value = '画像サイズが大きすぎます。より小さな画像をアップロードしてください。'
+    } else if (error.message.includes('応答がありません')) {
+      errorMessage.value = error.message
     } else if (error.message.includes('API')) {
       errorMessage.value = 'AI分析サービスでエラーが発生しました。しばらく待ってから再試行してください。'
     } else if (error.message.includes('レスポンス解析エラー')) {
@@ -203,8 +217,12 @@ const analyzeImage = async (areaId) => {
   }
 }
 
-// 統合解析実行
+// 統合解析実行（一時的に無効化）
 const performIntegratedAnalysis = async () => {
+  // 414エラー対策のため一時的に無効化
+  console.log('統合解析は一時的に無効化されています（414エラー対策）')
+  return
+  
   if (isIntegratedAnalyzing.value) return
   
   isIntegratedAnalyzing.value = true
@@ -270,7 +288,7 @@ const analyzeAllImages = async () => {
   isAnalyzing.value = false
 }
 
-// 買い物リスト生成
+// 買い物リスト生成（統合解析なしバージョン）
 const generateShoppingList = () => {
   if (Object.keys(capturedImages.value).length === 0) {
     errorMessage.value = '冷蔵庫の写真を少なくとも1つアップロードしてください'
@@ -282,27 +300,48 @@ const generateShoppingList = () => {
     return
   }
 
-  // 検出された食材を収集（量の情報も含む）
+  // 検出された食材を収集（全エリアから）
   const detectedItems = Object.values(capturedImages.value)
     .flatMap(area => area.detected_items || [])
+
+  console.log('検出された食材一覧:', detectedItems)
 
   // 常備食材と照合して不足分を抽出
   const missing = inventoryItems.value.filter(inventoryItem => {
     // この常備食材が検出されているかチェック
-    const detectedItem = detectedItems.find(detectedItem => 
-      detectedItem.name.toLowerCase().includes(inventoryItem.name.toLowerCase()) ||
-      inventoryItem.name.toLowerCase().includes(detectedItem.name.toLowerCase())
-    )
+    const detectedItem = detectedItems.find(detectedItem => {
+      const itemNameLower = detectedItem.name.toLowerCase()
+      const inventoryNameLower = inventoryItem.name.toLowerCase()
+      return itemNameLower.includes(inventoryNameLower) ||
+             inventoryNameLower.includes(itemNameLower) ||
+             itemNameLower === inventoryNameLower
+    })
     
-    // 検出されていない、または検出されていても量が「少ない」なら買い物リストに追加
-    return !detectedItem || detectedItem.quantity_level === 1 // 1: 少ない
+    // 検出されていない、または検出されていても量が「僅少」「少ない」なら買い物リストに追加
+    return !detectedItem || detectedItem.quantity_level <= 2 // 0:なし, 1:僅少, 2:少ない
   })
 
-  missingItems.value = missing.map(item => ({
-    id: item.id,
-    name: item.name,
+  console.log('不足している常備食材:', missing)
+
+  // 各エリアのrecommendationsも追加
+  const areaRecommendations = Object.values(capturedImages.value)
+    .flatMap(area => area.recommendations || [])
+    .filter((item, index, self) => self.indexOf(item) === index) // 重複除去
+
+  console.log('エリア別推奨:', areaRecommendations)
+
+  // 買い物リストに変換
+  const missingItemNames = missing.map(item => item.name)
+  const allMissingItems = [...missingItemNames, ...areaRecommendations]
+    .filter((item, index, self) => self.indexOf(item) === index) // 重複除去
+
+  missingItems.value = allMissingItems.map(itemName => ({
+    id: `missing_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    name: itemName,
     addedToList: true
   }))
+
+  console.log('生成された買い物リスト:', missingItems.value)
 
   currentStep.value = 'review'
   showResults.value = true
@@ -457,6 +496,8 @@ const removeImage = (areaId) => {
     </div>
 
     <!-- 統合解析結果 -->
+    <!-- 一時的に非表示（414エラー対策） -->
+    <!--
     <div v-if="integratedAnalysis" class="integrated-analysis">
       <div class="analysis-header">
         <h3>🔬 統合解析結果</h3>
@@ -487,6 +528,7 @@ const removeImage = (areaId) => {
         </div>
       </div>
     </div>
+    -->
 
     <!-- ステップインジケーター -->
     <div class="step-indicator">
@@ -732,6 +774,8 @@ const removeImage = (areaId) => {
         </div>
         
         <!-- 統合解析からの推奨 -->
+        <!-- 一時的に非表示（414エラー対策） -->
+        <!--
         <div v-if="integratedAnalysis && integratedAnalysis.shopping_priority" class="priority-items">
           <h4>🔥 優先購入リスト</h4>
           <div class="priority-list">
@@ -740,6 +784,7 @@ const removeImage = (areaId) => {
             </span>
           </div>
         </div>
+        -->
         
         <div class="items-list">
           <div v-for="item in missingItems" :key="item.id" class="missing-item">
