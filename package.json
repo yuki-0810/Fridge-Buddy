@@ -1,7 +1,7 @@
 {
   "name": "fridge-buddy",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "冷蔵庫管理アプリ - ローカル開発環境は使用せず、Vercel自動ビルドのみで開発",
   "scripts": {
@@ -12,7 +12,8 @@
   "dependencies": {
     "vue": "^3.5.17",
     "@supabase/supabase-js": "^2.39.3",
-    "openai": "^4.28.0"
+    "openai": "^4.28.0",
+    "@google/generative-ai": "^0.21.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",

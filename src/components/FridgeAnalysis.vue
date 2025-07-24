@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { imageToBase64, analyzeFridgeBasic } from '../openai-client.js'
+import { imageToBase64, analyzeFridgeWithYOLO, analyzeMultipleFridgeImages } from '../gemini-client.js'
 import { supabase } from '../supabase.js'
 
 // 撮影エリア定義
@@ -32,10 +32,14 @@ const CAMERA_AREAS = [
 const currentStep = ref('capture') // 'capture', 'analyze', 'review'
 const capturedImages = ref({}) // { areaId: { file, base64, name, detected_items, analysis_status } }
 const inventoryItems = ref([]) // 常備食材一覧
+const promptMap = ref({}) // 食材名とプロンプトのマップ
 const missingItems = ref([]) // 不足食材（買い物リスト）
+const integratedAnalysis = ref(null) // 統合解析結果
 const isAnalyzing = ref(false)
+const isIntegratedAnalyzing = ref(false)
 const errorMessage = ref('')
 const showResults = ref(false)
+const aiEngine = ref('gemini-yolo') // AI engine indicator
 
 // 初期化
 onMounted(async () => {
@@ -61,6 +65,18 @@ const loadInventoryItems = async () => {
     }
 
     inventoryItems.value = data || []
+    
+    // プロンプトマップを作成
+    const map = {}
+    inventoryItems.value.forEach(item => {
+      map[item.name] = {
+        prompt: item.description_prompt || '',
+        ai_prompt: item.ai_generated_prompt ? JSON.parse(item.ai_generated_prompt) : null
+      }
+    })
+    promptMap.value = map
+    
+    console.log('プロンプトマップ:', promptMap.value)
   } catch (error) {
     console.error('常備食材読み込みエラー:', error)
     errorMessage.value = '常備食材の読み込みに失敗しました'
@@ -111,7 +127,7 @@ const handleFileSelect = async (areaId, event) => {
   }
 }
 
-// AI分析実行
+// AI分析実行（Gemini YOLOベース）
 const analyzeImage = async (areaId) => {
   const imageData = capturedImages.value[areaId]
   if (!imageData) return
@@ -122,42 +138,94 @@ const analyzeImage = async (areaId) => {
   try {
     console.log(`${CAMERA_AREAS.find(a => a.id === areaId)?.name}の分析を開始...`)
     
-    const response = await analyzeFridgeBasic(imageData.base64)
-    console.log('AI Response:', response)
+    const stockList = inventoryItems.value.map(item => item.name)
+    const response = await analyzeFridgeWithYOLO(imageData.base64, stockList, promptMap.value)
+    
+    console.log('Gemini YOLO Response:', response)
     
     if (!response.success) {
-      throw new Error(`GPT-4o API error: ${response.error}`)
+      throw new Error(`Gemini API error: ${response.error}`)
     }
     
-    const content = response.result
-    console.log('AI Content:', content)
-
-    // JSONレスポンスをパース
-    const jsonMatch = content.match(/\{[\s\S]*\}/)
-    if (jsonMatch) {
-      const result = JSON.parse(jsonMatch[0])
-      console.log('Parsed Result:', result)
-      
-      const detectedItems = result.detected_items || []
-      imageData.detected_items = detectedItems.map((item, index) => ({
-        id: `ai_item_${areaId}_${index}_${Date.now()}`,
+    const result = response.result
+    console.log('解析結果:', result)
+    
+    if (result.detected_items) {
+      imageData.detected_items = result.detected_items.map((item, index) => ({
+        id: `yolo_item_${areaId}_${index}_${Date.now()}`,
         name: item.name,
-        quantity: item.quantity || '普通',
-        confidence: item.confidence || 80,
-        isAiGenerated: true
+        category: item.category || 'その他',
+        quantity_level: item.quantity_level || 3,
+        confidence: item.confidence || 70,
+        location: item.location || areaId,
+        bounding_box: item.bounding_box || '',
+        matched_prompt: item.matched_prompt || '',
+        visual_evidence: item.visual_evidence || '',
+        isAiGenerated: true,
+        engine: 'gemini-yolo'
       }))
-    } else {
-      console.warn('JSONが見つかりませんでした:', content)
-      imageData.detected_items = []
+      
+      // 分析サマリーを保存
+      imageData.analysis_summary = result.analysis_summary || {}
+      imageData.recommendations = result.recommendations || []
     }
-    
+
     imageData.analysis_status = 'completed'
     console.log(`${CAMERA_AREAS.find(a => a.id === areaId)?.name}の分析完了`)
     
+    // すべてのエリアが分析完了した場合、統合解析を実行
+    if (analysisStats.value.isComplete) {
+      await performIntegratedAnalysis()
+    }
+    
   } catch (error) {
-    console.error(`${areaId}の分析エラー:`, error)
+    console.error('AI分析エラー:', error)
     imageData.analysis_status = 'error'
-    errorMessage.value = `${CAMERA_AREAS.find(a => a.id === areaId)?.name}の分析に失敗しました`
+    errorMessage.value = `分析に失敗しました: ${error.message}`
+  }
+}
+
+// 統合解析実行
+const performIntegratedAnalysis = async () => {
+  if (isIntegratedAnalyzing.value) return
+  
+  isIntegratedAnalyzing.value = true
+  
+  try {
+    console.log('統合解析を開始...')
+    
+    const imageDataList = Object.values(capturedImages.value)
+      .filter(img => img.analysis_status === 'completed')
+      .map(img => img.base64)
+    
+    if (imageDataList.length === 0) return
+    
+    const stockList = inventoryItems.value.map(item => item.name)
+    const response = await analyzeMultipleFridgeImages(imageDataList, stockList, promptMap.value)
+    
+    console.log('統合解析レスポンス:', response)
+    
+    if (response.success) {
+      integratedAnalysis.value = response.result.integrated_analysis
+      
+      // 統合結果から買い物リストを生成
+      if (integratedAnalysis.value) {
+        missingItems.value = [
+          ...(integratedAnalysis.value.missing_items || []),
+          ...(integratedAnalysis.value.low_stock_alerts || []),
+          ...(integratedAnalysis.value.shopping_priority || [])
+        ].filter((item, index, self) => self.indexOf(item) === index) // 重複除去
+      }
+      
+      console.log('統合解析完了:', integratedAnalysis.value)
+    } else {
+      console.error('統合解析エラー:', response.error)
+    }
+  } catch (error) {
+    console.error('統合解析エラー:', error)
+    errorMessage.value = `統合解析に失敗しました: ${error.message}`
+  } finally {
+    isIntegratedAnalyzing.value = false
   }
 }
 
@@ -200,7 +268,7 @@ const generateShoppingList = () => {
     )
     
     // 検出されていない、または検出されていても量が「少ない」なら買い物リストに追加
-    return !detectedItem || detectedItem.quantity === '少ない'
+    return !detectedItem || detectedItem.quantity_level === 1 // 1: 少ない
   })
 
   missingItems.value = missing.map(item => ({
@@ -221,9 +289,12 @@ const addManualItem = (areaId) => {
   const newItem = {
     id: `manual_item_${areaId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     name: '新しい食材',
-    quantity: '普通',
+    category: 'その他',
+    quantity_level: 3, // 3: 普通
     confidence: 100,
-    isAiGenerated: false
+    location: areaId,
+    isAiGenerated: false,
+    engine: 'manual'
   }
 
   imageData.detected_items.push(newItem)
@@ -245,7 +316,7 @@ const startEditingItem = (areaId, item) => {
     areaId: areaId,
     itemId: item.id,
     name: item.name,
-    quantity: item.quantity
+    quantity_level: item.quantity_level || 3
   }
 }
 
@@ -261,7 +332,7 @@ const saveEditingItem = () => {
   
   if (itemIndex !== -1) {
     imageData.detected_items[itemIndex].name = editingItem.value.name
-    imageData.detected_items[itemIndex].quantity = editingItem.value.quantity
+    imageData.detected_items[itemIndex].quantity_level = editingItem.value.quantity_level
   }
   
   editingItem.value = null
@@ -271,6 +342,15 @@ const cancelEditing = () => {
   editingItem.value = null
 }
 
+// 量レベルを文字列に変換
+const quantityLevelToText = (level) => {
+  const map = {
+    0: 'なし',
+    1: '僅少',
+    2: '少ない',
+    3: '普通',
+    4: '多い'
+  }
 // 買い物リストをSupabaseに保存
 const saveShoppingList = async () => {
   try {
@@ -404,11 +484,15 @@ const removeImage = (areaId) => {
             <div class="analysis-status">
               <div v-if="capturedImages[area.id].analysis_status === 'analyzing'" class="status-analyzing">
                 <div class="status-spinner"></div>
-                <span>AI分析中...</span>
+                <span>🤖 Gemini YOLO分析中...</span>
               </div>
               <div v-else-if="capturedImages[area.id].analysis_status === 'completed'" class="status-completed">
                 <span class="status-icon">✅</span>
                 <span>分析完了（{{ capturedImages[area.id].detected_items.length }}件検出）</span>
+                <div v-if="capturedImages[area.id].analysis_summary" class="summary-details">
+                  <span class="summary-detail">高信頼度: {{ capturedImages[area.id].analysis_summary.high_confidence_items || 0 }}件</span>
+                  <span class="summary-detail">常備食材: {{ capturedImages[area.id].analysis_summary.stock_items_found || 0 }}件発見</span>
+                </div>
               </div>
               <div v-else-if="capturedImages[area.id].analysis_status === 'error'" class="status-error">
                 <span class="status-icon">⚠️</span>
@@ -609,6 +693,122 @@ const removeImage = (areaId) => {
   line-height: 1.5;
 }
 
+.ai-engine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: linear-gradient(135deg, #e0f2fe, #bae6fd);
+  border: 1px solid #0284c7;
+  color: #075985;
+  padding: 0.5rem 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-top: 1rem;
+}
+
+.engine-icon {
+  font-size: 1.25rem;
+}
+
+/* 統合解析結果 */
+.integrated-analysis {
+  background: white;
+  border: 2px solid #e0f2fe;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.analysis-header {
+  margin-bottom: 1rem;
+}
+
+.analysis-header h3 {
+  margin: 0 0 0.5rem 0;
+  color: #0c4a6e;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.analysis-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.summary-stat {
+  background: #f0f9ff;
+  color: #0c4a6e;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.analyzing-badge {
+  background: #fef3c7;
+  color: #d97706;
+  animation: pulse 2s infinite;
+}
+
+.comprehensive-inventory {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.inventory-item {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+
+.inventory-item .item-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.inventory-item .item-name {
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.total-quantity {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.confidence-badge {
+  background: #dcfce7;
+  color: #166534;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.item-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.locations, .notes {
+  display: block;
+}
+
 /* ステップインジケーター */
 .step-indicator {
   display: flex;
@@ -680,12 +880,6 @@ const removeImage = (areaId) => {
   color: #374151;
 }
 
-.capture-intro p {
-  margin: 0;
-  color: #6b7280;
-  font-size: 0.875rem;
-}
-
 .camera-areas {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -697,71 +891,67 @@ const removeImage = (areaId) => {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 0.75rem;
-  overflow: hidden;
+  padding: 1.5rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .area-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1rem;
-  background: #f8fafc;
-  border-bottom: 1px solid #e5e7eb;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 .area-icon {
   font-size: 2rem;
 }
 
-.area-info {
-  flex: 1;
-}
-
-.area-name {
+.area-info h4 {
   margin: 0;
   color: #374151;
   font-size: 1rem;
   font-weight: 600;
 }
 
-.area-description {
+.area-info p {
   margin: 0.25rem 0 0 0;
   color: #6b7280;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
 }
 
-/* アップロードゾーン */
 .upload-zone {
+  position: relative;
+  border: 2px dashed #d1d5db;
+  border-radius: 0.5rem;
   padding: 2rem;
   text-align: center;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.upload-zone:hover {
+  border-color: #3b82f6;
+  background: #f8fafc;
 }
 
 .file-input {
-  display: none;
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
 }
 
 .upload-label {
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.5rem;
-  padding: 1.5rem;
-  border: 2px dashed #cbd5e0;
-  border-radius: 0.5rem;
-  background: #f8fafc;
   cursor: pointer;
-  transition: all 0.2s;
-}
-
-.upload-label:hover {
-  border-color: #3b82f6;
-  background: #eff6ff;
 }
 
 .upload-icon {
   font-size: 2rem;
-  color: #6b7280;
 }
 
 .upload-text {
@@ -769,82 +959,96 @@ const removeImage = (areaId) => {
   font-weight: 500;
 }
 
-/* 撮影済み状態 */
 .captured-state {
-  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .image-preview {
   position: relative;
-  margin-bottom: 1rem;
 }
 
-.preview-image {
+.preview-image, .result-image {
   width: 100%;
-  max-height: 200px;
-  object-fit: contain;
+  height: 200px;
+  object-fit: cover;
   border-radius: 0.5rem;
-  background: #f8fafc;
+  border: 1px solid #e5e7eb;
 }
 
 .remove-image-btn {
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  background: rgba(239, 68, 68, 0.9);
+  background: rgba(0, 0, 0, 0.7);
   color: white;
   border: none;
+  border-radius: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  font-size: 1.25rem;
-  line-height: 1;
+  font-size: 0.75rem;
 }
 
 .analysis-status {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.875rem;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  text-align: center;
 }
 
 .status-analyzing {
+  background: #fef3c7;
+  color: #d97706;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
-  color: #3b82f6;
 }
 
 .status-spinner {
   width: 1rem;
   height: 1rem;
-  border: 2px solid #e5e7eb;
-  border-top: 2px solid #3b82f6;
+  border: 2px solid #fbbf24;
+  border-top: 2px solid #d97706;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+.status-completed {
+  background: #dcfce7;
+  color: #166534;
 }
 
-.status-completed {
+.summary-details {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  color: #10b981;
+  margin-top: 0.5rem;
+  justify-content: center;
+}
+
+.summary-detail {
+  background: #f0fdf4;
+  color: #14532d;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
 }
 
 .status-error {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: #ef4444;
+  background: #fee2e2;
+  color: #dc2626;
 }
 
-/* 分析セクション */
+.status-icon {
+  margin-right: 0.25rem;
+}
+
+/* 分析結果セクション */
 .analyze-header {
   text-align: center;
   margin-bottom: 2rem;
@@ -855,24 +1059,21 @@ const removeImage = (areaId) => {
   color: #374151;
 }
 
-.analyze-header p {
-  margin: 0 0 1rem 0;
-  color: #6b7280;
-  font-size: 0.875rem;
-}
-
 .analyze-stats {
   display: flex;
   justify-content: center;
   gap: 1rem;
-  font-size: 0.75rem;
-  color: #6b7280;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .stat {
-  padding: 0.25rem 0.5rem;
   background: #f3f4f6;
-  border-radius: 1rem;
+  color: #374151;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .detection-results {
@@ -886,61 +1087,39 @@ const removeImage = (areaId) => {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 0.75rem;
-  overflow: hidden;
+  padding: 1.5rem;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .result-header {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1rem;
-  background: #f8fafc;
-  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 1rem;
 }
 
-.result-header .area-name {
-  flex: 1;
+.result-header h4 {
   margin: 0;
   color: #374151;
-  font-size: 1rem;
   font-weight: 600;
 }
 
 .result-content {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 1fr 2fr;
   gap: 1.5rem;
-  padding: 1.5rem;
-}
-
-.image-container {
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-}
-
-.result-image {
-  width: 100%;
-  max-height: 250px;
-  object-fit: contain;
-  border-radius: 0.5rem;
-  background: #f8fafc;
 }
 
 .detected-items {
-  display: flex;
-  flex-direction: column;
+  background: #f9fafb;
+  border-radius: 0.5rem;
+  padding: 1rem;
 }
 
 .no-items {
   text-align: center;
-  padding: 2rem;
   color: #6b7280;
-}
-
-.no-items p {
-  margin: 0 0 1rem 0;
+  padding: 2rem 1rem;
 }
 
 .items-list {
@@ -950,102 +1129,146 @@ const removeImage = (areaId) => {
 }
 
 .item-row {
+  background: white;
   border: 1px solid #e5e7eb;
   border-radius: 0.5rem;
-  padding: 1rem;
+  padding: 0.75rem;
   transition: all 0.2s;
 }
 
 .item-row.ai-generated {
   border-left: 4px solid #10b981;
-  background: #f0fdf4;
 }
 
 .item-row.manual {
   border-left: 4px solid #f59e0b;
-  background: #fffbeb;
 }
 
-.display-mode {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.item-row:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.item-info {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
-  font-size: 0.875rem;
-}
-
-.item-name {
-  font-weight: bold;
-  color: #1f2937;
-}
-
-.item-quantity {
-  background: #e5e7eb;
-  color: #374151;
-  padding: 0.125rem 0.5rem;
-  border-radius: 1rem;
-  font-size: 0.75rem;
-}
-
-.confidence {
-  background: #ddd6fe;
-  color: #5b21b6;
-  padding: 0.125rem 0.375rem;
-  border-radius: 1rem;
-  font-size: 0.75rem;
-  font-weight: bold;
-}
-
-.source-badge {
-  padding: 0.125rem 0.375rem;
-  border-radius: 1rem;
-  font-size: 0.75rem;
-  font-weight: bold;
-}
-
-.item-row.ai-generated .source-badge {
-  background: #d1fae5;
-  color: #065f46;
-}
-
-.item-row.manual .source-badge {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.item-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-/* 編集モード */
 .editing-mode {
   display: flex;
-  gap: 0.75rem;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .edit-input, .edit-select {
   padding: 0.5rem;
-  border: 1px solid #cbd5e0;
-  border-radius: 0.25rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
   font-size: 0.875rem;
-  background: white;
 }
 
-.edit-input {
-  flex: 1;
+.edit-input:focus, .edit-select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
 .edit-actions {
   display: flex;
   gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.display-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.item-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.item-name {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.item-category {
+  background: #e5e7eb;
+  color: #374151;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.item-quantity {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.confidence {
+  background: #dcfce7;
+  color: #166534;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.source-badge {
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.ai-badge {
+  background: #10b981;
+  color: white;
+}
+
+.manual-badge {
+  background: #f59e0b;
+  color: white;
+}
+
+/* YOLO詳細情報 */
+.yolo-details {
+  background: #f0f9ff;
+  border: 1px solid #e0f2fe;
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.75rem;
+}
+
+.yolo-details > div {
+  margin-bottom: 0.5rem;
+}
+
+.yolo-details > div:last-child {
+  margin-bottom: 0;
+}
+
+.detail-label {
+  font-weight: 500;
+  color: #0c4a6e;
+  margin-right: 0.5rem;
+}
+
+.detail-text {
+  color: #64748b;
+}
+
+.item-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  align-self: flex-end;
 }
 
 /* 買い物リストセクション */
@@ -1059,19 +1282,13 @@ const removeImage = (areaId) => {
   color: #374151;
 }
 
-.review-header p {
-  margin: 0;
-  color: #6b7280;
-  font-size: 0.875rem;
-}
-
 .no-missing {
   text-align: center;
   padding: 3rem 1rem;
   background: white;
-  border: 1px solid #e5e7eb;
   border-radius: 0.75rem;
-  margin-bottom: 2rem;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .success-icon {
@@ -1079,34 +1296,54 @@ const removeImage = (areaId) => {
   margin-bottom: 1rem;
 }
 
-.no-missing h4 {
-  margin: 0 0 0.5rem 0;
-  color: #374151;
-}
-
-.no-missing p {
-  margin: 0;
-  color: #6b7280;
-}
-
 .missing-items {
   background: white;
   border: 1px solid #e5e7eb;
   border-radius: 0.75rem;
-  overflow: hidden;
-  margin-bottom: 2rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .missing-count {
-  padding: 1rem;
-  background: #f8fafc;
-  border-bottom: 1px solid #e5e7eb;
-  color: #374151;
+  font-size: 1.125rem;
   font-weight: 600;
+  color: #374151;
+  margin-bottom: 1rem;
+}
+
+.priority-items {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: #fef3c7;
+  border: 1px solid #fbbf24;
+  border-radius: 0.5rem;
+}
+
+.priority-items h4 {
+  margin: 0 0 0.75rem 0;
+  color: #d97706;
+  font-size: 1rem;
+}
+
+.priority-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.priority-item {
+  background: #f59e0b;
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
 .missing-item {
-  padding: 1rem;
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 0;
   border-bottom: 1px solid #f3f4f6;
 }
 
@@ -1119,15 +1356,45 @@ const removeImage = (areaId) => {
   align-items: center;
   gap: 0.75rem;
   cursor: pointer;
-  font-size: 0.875rem;
-  color: #374151;
+  width: 100%;
 }
 
 .item-checkbox input[type="checkbox"] {
   margin: 0;
 }
 
-/* ボタン */
+.checkmark {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid #d1d5db;
+  border-radius: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.item-checkbox input[type="checkbox"]:checked + .checkmark {
+  background: #10b981;
+  border-color: #10b981;
+}
+
+.item-checkbox input[type="checkbox"]:checked + .checkmark::after {
+  content: '✓';
+  color: white;
+  font-weight: bold;
+  font-size: 0.75rem;
+}
+
+/* ボタンスタイル */
+.action-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 2rem;
+  flex-wrap: wrap;
+}
+
 .btn {
   padding: 0.75rem 1.5rem;
   border: none;
@@ -1139,12 +1406,7 @@ const removeImage = (areaId) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.875rem;
-}
-
-.btn-sm {
-  padding: 0.5rem 1rem;
-  font-size: 0.75rem;
+  min-width: 140px;
 }
 
 .btn-primary {
@@ -1156,12 +1418,17 @@ const removeImage = (areaId) => {
   background: #2563eb;
 }
 
+.btn-primary:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
 .btn-secondary {
   background: #6b7280;
   color: white;
 }
 
-.btn-secondary:hover:not(:disabled) {
+.btn-secondary:hover {
   background: #4b5563;
 }
 
@@ -1170,30 +1437,31 @@ const removeImage = (areaId) => {
   color: white;
 }
 
-.btn-danger:hover:not(:disabled) {
+.btn-danger:hover {
   background: #dc2626;
 }
 
-.btn:disabled {
-  background: #9ca3af;
-  cursor: not-allowed;
+.btn-sm {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  min-width: auto;
 }
 
-.action-buttons {
-  display: flex;
-  justify-content: center;
-  gap: 1rem;
-  margin-top: 2rem;
+/* アニメーション */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
 /* レスポンシブ */
 @media (max-width: 768px) {
   .analysis-container {
     padding: 0.5rem;
-  }
-  
-  .step-indicator {
-    gap: 1rem;
   }
   
   .camera-areas {
@@ -1204,19 +1472,32 @@ const removeImage = (areaId) => {
     grid-template-columns: 1fr;
   }
   
-  .display-mode {
+  .analyze-stats {
     flex-direction: column;
-    align-items: flex-start;
-    gap: 0.75rem;
-  }
-  
-  .editing-mode {
-    flex-direction: column;
-    align-items: stretch;
+    gap: 0.5rem;
   }
   
   .action-buttons {
     flex-direction: column;
+  }
+  
+  .btn {
+    width: 100%;
+  }
+  
+  .result-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+  
+  .item-info {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .yolo-details {
+    font-size: 0.6875rem;
   }
 }
 </style> 

@@ -1,8 +1,10 @@
--- 常備食材テーブル
+-- 常備食材テーブル（拡張版）
 CREATE TABLE inventory_items (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  description_prompt TEXT, -- AI認識用の特徴プロンプト
+  ai_generated_prompt TEXT, -- AIが生成したプロンプト
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -17,9 +19,21 @@ CREATE TABLE shopping_list (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- 分析セッションテーブル（新規）
+CREATE TABLE analysis_sessions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  session_name TEXT NOT NULL,
+  analysis_results JSONB, -- 分析結果のJSON
+  images_analyzed INTEGER DEFAULT 0,
+  ai_engine TEXT DEFAULT 'gemini', -- 使用したAIエンジン
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- RLSポリシーの有効化
 ALTER TABLE inventory_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopping_list ENABLE ROW LEVEL SECURITY;
+ALTER TABLE analysis_sessions ENABLE ROW LEVEL SECURITY;
 
 -- 常備食材のRLSポリシー
 CREATE POLICY "Users can view their own inventory items" ON inventory_items
@@ -47,8 +61,28 @@ CREATE POLICY "Users can update their own shopping list items" ON shopping_list
 CREATE POLICY "Users can delete their own shopping list items" ON shopping_list
   FOR DELETE USING (auth.uid() = user_id);
 
+-- 分析セッションのRLSポリシー
+CREATE POLICY "Users can view their own analysis sessions" ON analysis_sessions
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own analysis sessions" ON analysis_sessions
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own analysis sessions" ON analysis_sessions
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own analysis sessions" ON analysis_sessions
+  FOR DELETE USING (auth.uid() = user_id);
+
 -- インデックス作成
 CREATE INDEX idx_inventory_items_user_id ON inventory_items(user_id);
 CREATE INDEX idx_inventory_items_name ON inventory_items(name);
 CREATE INDEX idx_shopping_list_user_id ON shopping_list(user_id);
 CREATE INDEX idx_shopping_list_is_purchased ON shopping_list(is_purchased);
+CREATE INDEX idx_analysis_sessions_user_id ON analysis_sessions(user_id);
+CREATE INDEX idx_analysis_sessions_created_at ON analysis_sessions(created_at);
+
+-- 既存テーブルへのカラム追加（マイグレーション用）
+-- 既にテーブルが存在する場合のためのALTER文
+ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS description_prompt TEXT;
+ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS ai_generated_prompt TEXT;
