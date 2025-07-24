@@ -351,6 +351,9 @@ const quantityLevelToText = (level) => {
     3: '普通',
     4: '多い'
   }
+  return map[level] || '不明'
+}
+
 // 買い物リストをSupabaseに保存
 const saveShoppingList = async () => {
   try {
@@ -413,11 +416,49 @@ const removeImage = (areaId) => {
   <div class="analysis-container">
     <!-- ヘッダー -->
     <div class="page-header">
-      <h2 class="page-title">📸 冷蔵庫の確認</h2>
+      <h2 class="page-title">📸 冷蔵庫の確認 v2.0</h2>
       <p class="page-description">
-        冷蔵庫を3つの角度から撮影して、AIが食材を自動検出します。<br>
-        常備食材と照合して、不足分を買い物リストに追加できます。
+        <strong>🆕 Gemini YOLO検出</strong>で精度が向上！冷蔵庫を3つの角度から撮影して、AIが食材を自動検出します。<br>
+        <strong>🤖 特徴プロンプト</strong>により、常備食材の認識精度が大幅に向上しました。
       </p>
+      
+      <!-- AI Engine Indicator -->
+      <div class="ai-engine-badge">
+        <span class="engine-icon">🤖</span>
+        <span class="engine-text">Gemini 2.5 Flash + YOLO Detection</span>
+      </div>
+    </div>
+
+    <!-- 統合解析結果 -->
+    <div v-if="integratedAnalysis" class="integrated-analysis">
+      <div class="analysis-header">
+        <h3>🔬 統合解析結果</h3>
+        <div class="analysis-summary">
+          <span class="summary-stat">
+            📊 {{ integratedAnalysis.total_areas_scanned }}エリア分析
+          </span>
+          <span class="summary-stat">
+            🔍 {{ integratedAnalysis.comprehensive_inventory?.length || 0 }}食材検出
+          </span>
+          <span v-if="isIntegratedAnalyzing" class="analyzing-badge">
+            🔄 統合解析中...
+          </span>
+        </div>
+      </div>
+      
+      <div class="comprehensive-inventory">
+        <div v-for="item in integratedAnalysis.comprehensive_inventory" :key="item.name" class="inventory-item">
+          <div class="item-header">
+            <span class="item-name">{{ item.name }}</span>
+            <span class="total-quantity">{{ item.total_quantity }}</span>
+            <span class="confidence-badge">{{ item.confidence }}%</span>
+          </div>
+          <div class="item-details">
+            <span class="locations">📍 {{ item.locations?.join(', ') }}</span>
+            <span v-if="item.notes" class="notes">💡 {{ item.notes }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ステップインジケーター -->
@@ -518,11 +559,12 @@ const removeImage = (areaId) => {
     <div v-else-if="currentStep === 'analyze'" class="analyze-section">
       <div class="analyze-header">
         <h3>🤖 AI検出結果の確認</h3>
-        <p>検出された食材を確認し、必要に応じて編集してください。</p>
+        <p>YOLOベース検出で食材を特定しました。必要に応じて編集してください。</p>
         
         <div class="analyze-stats">
           <span class="stat">撮影: {{ analysisStats.capturedAreas }}/{{ analysisStats.totalAreas }}エリア</span>
           <span class="stat">検出: {{ analysisStats.totalDetectedItems }}個の食材</span>
+          <span class="stat">エンジン: {{ aiEngine }}</span>
         </div>
       </div>
 
@@ -567,10 +609,12 @@ const removeImage = (areaId) => {
                         placeholder="食材名"
                         class="edit-input"
                       >
-                      <select v-model="editingItem.quantity" class="edit-select">
-                        <option value="多い">多い</option>
-                        <option value="普通">普通</option>
-                        <option value="少ない">少ない</option>
+                      <select v-model="editingItem.quantity_level" class="edit-select">
+                        <option :value="0">なし</option>
+                        <option :value="1">僅少</option>
+                        <option :value="2">少ない</option>
+                        <option :value="3">普通</option>
+                        <option :value="4">多い</option>
                       </select>
                       <div class="edit-actions">
                         <button @click="saveEditingItem()" class="btn btn-primary btn-sm">✅</button>
@@ -582,10 +626,30 @@ const removeImage = (areaId) => {
                     <div v-else class="display-mode">
                       <div class="item-info">
                         <span class="item-name">{{ item.name }}</span>
-                        <span class="item-quantity">{{ item.quantity }}</span>
+                        <span class="item-category">{{ item.category }}</span>
+                        <span class="item-quantity">{{ quantityLevelToText(item.quantity_level) }}</span>
                         <span v-if="item.confidence" class="confidence">{{ item.confidence }}%</span>
-                        <span class="source-badge">{{ item.isAiGenerated ? 'AI' : '手動' }}</span>
+                        <span class="source-badge" :class="{ 'ai-badge': item.isAiGenerated, 'manual-badge': !item.isAiGenerated }">
+                          {{ item.isAiGenerated ? 'YOLO' : '手動' }}
+                        </span>
                       </div>
+                      
+                      <!-- YOLO詳細情報 -->
+                      <div v-if="item.isAiGenerated && item.engine === 'gemini-yolo'" class="yolo-details">
+                        <div v-if="item.matched_prompt" class="matched-prompt">
+                          <span class="detail-label">🎯 使用プロンプト:</span>
+                          <span class="detail-text">{{ item.matched_prompt }}</span>
+                        </div>
+                        <div v-if="item.visual_evidence" class="visual-evidence">
+                          <span class="detail-label">👁️ 視覚的根拠:</span>
+                          <span class="detail-text">{{ item.visual_evidence }}</span>
+                        </div>
+                        <div v-if="item.location" class="location-info">
+                          <span class="detail-label">📍 検出位置:</span>
+                          <span class="detail-text">{{ item.location }}</span>
+                        </div>
+                      </div>
+                      
                       <div class="item-actions">
                         <button @click="startEditingItem(area.id, item)" class="btn btn-secondary btn-sm">✏️</button>
                         <button @click="removeItem(area.id, item.id)" class="btn btn-danger btn-sm">🗑️</button>
@@ -618,7 +682,7 @@ const removeImage = (areaId) => {
     <div v-else-if="currentStep === 'review'" class="review-section">
       <div class="review-header">
         <h3>🛒 買い物リスト</h3>
-        <p>常備食材と照合した結果、以下の食材が不足しています。</p>
+        <p>常備食材との照合結果と統合解析により、以下の食材の購入をお勧めします。</p>
       </div>
 
       <div v-if="missingItems.length === 0" class="no-missing">
@@ -629,7 +693,17 @@ const removeImage = (areaId) => {
 
       <div v-else class="missing-items">
         <div class="missing-count">
-          不足している食材: {{ missingItems.filter(item => item.addedToList).length }}件
+          購入推奨食材: {{ missingItems.filter(item => item.addedToList).length }}件
+        </div>
+        
+        <!-- 統合解析からの推奨 -->
+        <div v-if="integratedAnalysis && integratedAnalysis.shopping_priority" class="priority-items">
+          <h4>🔥 優先購入リスト</h4>
+          <div class="priority-list">
+            <span v-for="item in integratedAnalysis.shopping_priority" :key="item" class="priority-item">
+              {{ item }}
+            </span>
+          </div>
         </div>
         
         <div class="items-list">

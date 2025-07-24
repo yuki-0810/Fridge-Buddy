@@ -27,7 +27,7 @@ export const imageToBase64 = (file) => {
 // 常備食材の特徴プロンプトを生成
 export const generateIngredientPrompt = async (ingredientName) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
     
     const prompt = `
 「${ingredientName}」という食材について、冷蔵庫での画像認識精度を向上させるための特徴プロンプトを生成してください。
@@ -56,21 +56,21 @@ export const generateIngredientPrompt = async (ingredientName) => {
       return {
         success: true,
         result: parsedResult,
-        model: "gemini-1.5-flash"
+        model: "gemini-2.5-flash"
       }
     } catch (parseError) {
       return {
         success: false,
         error: "レスポンスのパースに失敗しました",
         rawResponse: text,
-        model: "gemini-1.5-flash"
+        model: "gemini-2.5-flash"
       }
     }
   } catch (error) {
     return {
       success: false,
       error: error.message,
-      model: "gemini-1.5-flash"
+      model: "gemini-2.5-flash"
     }
   }
 }
@@ -78,7 +78,7 @@ export const generateIngredientPrompt = async (ingredientName) => {
 // YOLOベース画像解析（基本版）
 export const analyzeFridgeWithYOLO = async (imageBase64, stockList = [], promptMap = {}) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" })
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
     
     // 常備食材のプロンプトを構築
     const ingredientPrompts = stockList.map(item => {
@@ -138,7 +138,7 @@ ${ingredientPrompts}
       return {
         success: true,
         result: parsedResult,
-        model: "gemini-1.5-pro",
+        model: "gemini-2.5-flash",
         engine: "YOLO-based"
       }
     } catch (parseError) {
@@ -146,14 +146,14 @@ ${ingredientPrompts}
         success: false,
         error: "レスポンスのパースに失敗しました",
         rawResponse: text,
-        model: "gemini-1.5-pro"
+        model: "gemini-2.5-flash"
       }
     }
   } catch (error) {
     return {
       success: false,
       error: error.message,
-      model: "gemini-1.5-pro"
+      model: "gemini-2.5-flash"
     }
   }
 }
@@ -161,7 +161,7 @@ ${ingredientPrompts}
 // 軽量版解析（Gemini Flash使用）
 export const analyzeFridgeLightweight = async (imageBase64, stockList = []) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
     
     const stockListText = stockList.length > 0 
       ? `特に以下の常備食材を重点的に検出：${stockList.join(', ')}`
@@ -200,21 +200,21 @@ export const analyzeFridgeLightweight = async (imageBase64, stockList = []) => {
       return {
         success: true,
         result: parsedResult,
-        model: "gemini-1.5-flash"
+        model: "gemini-2.5-flash"
       }
     } catch (parseError) {
       return {
         success: false,
         error: "レスポンスのパースに失敗しました",
         rawResponse: text,
-        model: "gemini-1.5-flash"
+        model: "gemini-2.5-flash"
       }
     }
   } catch (error) {
     return {
       success: false,
       error: error.message,
-      model: "gemini-1.5-flash"
+      model: "gemini-2.5-flash"
     }
   }
 }
@@ -222,7 +222,7 @@ export const analyzeFridgeLightweight = async (imageBase64, stockList = []) => {
 // 複数画像の統合解析
 export const analyzeMultipleFridgeImages = async (imageDataList, stockList = [], promptMap = {}) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" })
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" })
     
     const ingredientPrompts = stockList.map(item => {
       const itemPrompt = promptMap[item] || {}
@@ -275,7 +275,7 @@ ${ingredientPrompts}
       return {
         success: true,
         result: parsedResult,
-        model: "gemini-1.5-pro",
+        model: "gemini-2.5-flash",
         images_analyzed: imageDataList.length
       }
     } catch (parseError) {
@@ -283,14 +283,14 @@ ${ingredientPrompts}
         success: false,
         error: "レスポンスのパースに失敗しました",
         rawResponse: text,
-        model: "gemini-1.5-pro"
+        model: "gemini-2.5-flash"
       }
     }
   } catch (error) {
     return {
       success: false,
       error: error.message,
-      model: "gemini-1.5-pro"
+      model: "gemini-2.5-flash"
     }
   }
 } 

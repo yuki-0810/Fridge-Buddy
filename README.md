@@ -162,7 +162,7 @@ ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS ai_generated_prompt TEXT;
 - **CSS3** - レスポンシブデザイン
 
 ### AI・画像認識
-- **Google Gemini 1.5 Pro** - 高精度画像解析エンジン（v2.0で新採用）
+- **Google Gemini 2.5 Flash** - 最新高精度画像解析エンジン（v2.0で新採用）
 - **YOLO物体検出** - 正確な食材識別アルゴリズム
 - **特徴プロンプト** - AIとユーザーによる認識精度向上システム
 
@@ -239,7 +239,7 @@ git push origin main
 - **環境変数はVercelで設定** - ローカル.envファイルは使用しない
 
 ### v2.0での技術的変更
-- **Gemini 1.5 Pro API** - 画像解析メインエンジンに採用
+- **Gemini 2.5 Flash API** - 画像解析メインエンジンに採用
 - **YOLO物体検出** - 高精度食材識別アルゴリズム
 - **特徴プロンプトシステム** - AIとユーザーによる認識精度向上
 - **統合解析機能** - 複数画像からの包括的判定
