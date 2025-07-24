@@ -139,12 +139,15 @@ const analyzeImage = async (areaId) => {
     console.log(`${CAMERA_AREAS.find(a => a.id === areaId)?.name}の分析を開始...`)
     
     const stockList = inventoryItems.value.map(item => item.name)
+    console.log('常備食材リスト:', stockList)
+    console.log('プロンプトマップ:', promptMap.value)
+    
     const response = await analyzeFridgeWithYOLO(imageData.base64, stockList, promptMap.value)
     
     console.log('Gemini YOLO Response:', response)
     
     if (!response.success) {
-      throw new Error(`Gemini API error: ${response.error}`)
+      throw new Error(response.error || 'AI分析に失敗しました')
     }
     
     const result = response.result
@@ -155,8 +158,8 @@ const analyzeImage = async (areaId) => {
         id: `yolo_item_${areaId}_${index}_${Date.now()}`,
         name: item.name,
         category: item.category || 'その他',
-        quantity_level: item.quantity_level || 3,
-        confidence: item.confidence || 70,
+        quantity_level: typeof item.quantity_level === 'number' ? item.quantity_level : 3,
+        confidence: typeof item.confidence === 'number' ? item.confidence : 70,
         location: item.location || areaId,
         bounding_box: item.bounding_box || '',
         matched_prompt: item.matched_prompt || '',
@@ -168,6 +171,11 @@ const analyzeImage = async (areaId) => {
       // 分析サマリーを保存
       imageData.analysis_summary = result.analysis_summary || {}
       imageData.recommendations = result.recommendations || []
+    } else {
+      console.warn('検出された食材がありません')
+      imageData.detected_items = []
+      imageData.analysis_summary = {}
+      imageData.recommendations = []
     }
 
     imageData.analysis_status = 'completed'
@@ -181,7 +189,17 @@ const analyzeImage = async (areaId) => {
   } catch (error) {
     console.error('AI分析エラー:', error)
     imageData.analysis_status = 'error'
-    errorMessage.value = `分析に失敗しました: ${error.message}`
+    
+    // エラーメッセージをより具体的に
+    if (error.message.includes('414') || error.message.includes('URI Too Long')) {
+      errorMessage.value = '画像サイズが大きすぎます。より小さな画像をアップロードしてください。'
+    } else if (error.message.includes('API')) {
+      errorMessage.value = 'AI分析サービスでエラーが発生しました。しばらく待ってから再試行してください。'
+    } else if (error.message.includes('レスポンス解析エラー')) {
+      errorMessage.value = 'AI分析結果の処理でエラーが発生しました。画像を変えて再試行してください。'
+    } else {
+      errorMessage.value = `分析に失敗しました: ${error.message}`
+    }
   }
 }
 
@@ -198,32 +216,41 @@ const performIntegratedAnalysis = async () => {
       .filter(img => img.analysis_status === 'completed')
       .map(img => img.base64)
     
-    if (imageDataList.length === 0) return
+    if (imageDataList.length === 0) {
+      console.log('統合解析対象の画像がありません')
+      return
+    }
     
     const stockList = inventoryItems.value.map(item => item.name)
     const response = await analyzeMultipleFridgeImages(imageDataList, stockList, promptMap.value)
     
     console.log('統合解析レスポンス:', response)
     
-    if (response.success) {
+    if (response.success && response.result && response.result.integrated_analysis) {
       integratedAnalysis.value = response.result.integrated_analysis
       
       // 統合結果から買い物リストを生成
       if (integratedAnalysis.value) {
-        missingItems.value = [
+        const missingList = [
           ...(integratedAnalysis.value.missing_items || []),
           ...(integratedAnalysis.value.low_stock_alerts || []),
           ...(integratedAnalysis.value.shopping_priority || [])
         ].filter((item, index, self) => self.indexOf(item) === index) // 重複除去
+        
+        missingItems.value = missingList.map(itemName => ({
+          id: `missing_${Date.now()}_${itemName}`,
+          name: itemName,
+          addedToList: true
+        }))
       }
       
       console.log('統合解析完了:', integratedAnalysis.value)
     } else {
-      console.error('統合解析エラー:', response.error)
+      console.warn('統合解析結果が不正です:', response)
     }
   } catch (error) {
     console.error('統合解析エラー:', error)
-    errorMessage.value = `統合解析に失敗しました: ${error.message}`
+    // 統合解析のエラーは非致命的なので、ユーザーには表示しない
   } finally {
     isIntegratedAnalyzing.value = false
   }
@@ -525,7 +552,8 @@ const removeImage = (areaId) => {
             <div class="analysis-status">
               <div v-if="capturedImages[area.id].analysis_status === 'analyzing'" class="status-analyzing">
                 <div class="status-spinner"></div>
-                <span>🤖 Gemini YOLO分析中...</span>
+                <span>🤖 Gemini 2.5 Flash分析中...</span>
+                <div class="analyzing-detail">YOLO物体検出実行中</div>
               </div>
               <div v-else-if="capturedImages[area.id].analysis_status === 'completed'" class="status-completed">
                 <span class="status-icon">✅</span>
@@ -538,6 +566,13 @@ const removeImage = (areaId) => {
               <div v-else-if="capturedImages[area.id].analysis_status === 'error'" class="status-error">
                 <span class="status-icon">⚠️</span>
                 <span>分析失敗</span>
+                <button @click="analyzeImage(area.id)" class="retry-btn">
+                  🔄 再試行
+                </button>
+              </div>
+              <div v-else class="status-pending">
+                <span class="status-icon">⏳</span>
+                <span>分析待機中...</span>
               </div>
             </div>
           </div>
@@ -1078,9 +1113,16 @@ const removeImage = (areaId) => {
   background: #fef3c7;
   color: #d97706;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+}
+
+.analyzing-detail {
+  font-size: 0.75rem;
+  color: #92400e;
+  font-weight: 500;
 }
 
 .status-spinner {
@@ -1097,6 +1139,35 @@ const removeImage = (areaId) => {
   color: #166534;
 }
 
+.status-error {
+  background: #fee2e2;
+  color: #dc2626;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-pending {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.retry-btn {
+  background: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.retry-btn:hover {
+  background: #dc2626;
+}
+
 .summary-details {
   display: flex;
   flex-wrap: wrap;
@@ -1111,11 +1182,6 @@ const removeImage = (areaId) => {
   padding: 0.125rem 0.5rem;
   border-radius: 0.25rem;
   font-size: 0.75rem;
-}
-
-.status-error {
-  background: #fee2e2;
-  color: #dc2626;
 }
 
 .status-icon {
